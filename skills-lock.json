@@ -11,7 +11,7 @@
       "source": "warpdotdev-demos/cloud-factory-demo",
       "sourceType": "github",
       "skillPath": ".agents/skills/implementation/SKILL.md",
-      "computedHash": "a7298efcec9a7f301b765dba08cde0352df0166dff140f09415cc4bba8c5e944"
+      "computedHash": "3204ef1974389917ac8d6e3a9fc073b5d7eba2e9c28f8bba498a26a6de21ebe3"
     },
     "improve-review-pr": {
       "source": "warpdotdev-demos/cloud-factory-demo",
@@ -47,7 +47,7 @@
       "source": "warpdotdev-demos/cloud-factory-demo",
       "sourceType": "github",
       "skillPath": ".agents/skills/verify-behavior/SKILL.md",
-      "computedHash": "e077b18b0ec33cf63756ba910e898666b1ef66ffaa069f15b62bcbf2f6f1edb2"
+      "computedHash": "3c7a6577ca2b6298dc809b17c4b1d11d422e5e2f07b3caa26a30562245c5d150"
     },
     "write-product-spec": {
       "source": "warpdotdev/common-skills",
