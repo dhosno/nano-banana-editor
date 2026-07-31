@@ -131,7 +131,7 @@ export default function Home() {
             Image Upload
           </h1>
           <p className="text-gray-600">
-            {selectedImage ? "Edit your thumbnail with instructions below" : "Select a thumbnail image from your computer"}
+            {selectedImage ? "Edit your image with instructions below" : "Select an image from your computer"}
           </p>
         </div>
 
@@ -164,7 +164,7 @@ export default function Home() {
                 <div className="relative">
                   <Image
                     src={selectedImage}
-                    alt="Uploaded thumbnail"
+                    alt="Uploaded image"
                     width={900}
                     height={900}
                     className="rounded-lg shadow-lg object-cover"
@@ -183,7 +183,7 @@ export default function Home() {
                     id="instructions"
                     value={instructions}
                     onChange={(e) => setInstructions(e.target.value)}
-                    placeholder="Describe how you want to edit this thumbnail..."
+                    placeholder="Describe how you want to edit this image..."
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-colors"
                     disabled={isSubmitting}
                   />
