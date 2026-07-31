@@ -168,7 +168,7 @@ export default function Home() {
                     width={900}
                     height={900}
                     className="rounded-lg shadow-lg object-cover"
-                    style={{ width: 'auto', height: 'auto', maxWidth: '900px', maxHeight: '900px' }}
+                    style={{ width: 'auto', height: 'auto', maxWidth: '90px', maxHeight: '90px' }}
                   />
                 </div>
               </div>
