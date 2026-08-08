@@ -52,7 +52,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/warpdotdev/nano-banana-editor.git
+git clone https://github.com/warpdotdev-demos/nano-banana-editor.git
 cd nano-banana-editor
 
 # Install dependencies
@@ -198,7 +198,8 @@ Or just push to the default branch once the Git integration is connected.
 #### Platform limits to be aware of
 
 - **Function timeout.** `src/app/api/process-image/route.ts` exports `maxDuration = 300` (seconds) and `runtime = 'nodejs'`. Gemini image generation is awaited synchronously, so the request stays open for the whole generation and the default timeout is not enough. 300s is the maximum allowed on the Hobby plan, and is also valid on Pro and Enterprise (which permit more). Hobby only reaches 300s with fluid compute, which is enabled by default for new projects; on a legacy project with fluid compute disabled the ceiling is 60s and the build rejects a higher value — lower `maxDuration` to `60` if that happens.
-- **Request body size.** Vercel rejects function request bodies larger than **4.5 MB** with a `413 FUNCTION_PAYLOAD_TOO_LARGE` before the route handler runs, so the API cannot return a helpful error. The client therefore refuses uploads over **4 MB** (`MAX_IMAGE_BYTES` in `src/app/page.tsx`), leaving headroom for multipart overhead. The same check runs on each iteration, because every generated PNG becomes the next request's input and can be larger than the image it replaced. If you need bigger images, that requires a different upload path (for example direct-to-blob uploads), not a bigger limit.
+- **Request body size.** Vercel rejects function request bodies larger than **4.5 MB** with a `413 FUNCTION_PAYLOAD_TOO_LARGE` before the route handler runs, so the API cannot return a helpful error. The client therefore refuses uploads over **4 MB** (`MAX_IMAGE_BYTES` in `src/app/page.tsx`), leaving headroom for multipart overhead. The same check runs on each iteration, because every generated PNG becomes the next request's input and can be larger than the image it replaced.
+- **Response body size.** The 4.5 MB cap applies to the response body too, and the client-side guard **cannot** prevent that side. `/api/process-image` returns the generated image as base64 inside JSON, which is roughly 1.33x the binary size, so the response exceeds the cap once a generated PNG is larger than about 3.3 MB — reachable even when the input was within the 4 MB limit, because the size of a generated image is not a function of the size of the input. When it happens the platform kills the response before any client-side check can run, and the browser reports the generic "Error: Failed to submit form" (the 413 body is not JSON, so parsing the response throws). If you hit this, the fix is a different transport — returning a URL to blob storage instead of inline base64 — not a smaller upload limit.
 
 ### Other Platforms
 

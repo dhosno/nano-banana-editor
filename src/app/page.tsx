@@ -12,10 +12,15 @@ interface ImageHistoryItem {
 // Vercel rejects serverless function request bodies larger than 4.5 MB with a
 // 413 before the route handler ever runs, so the API cannot return a useful
 // error. Guard on the client with headroom for multipart form overhead.
+//
+// Note that the same 4.5 MB cap also applies to the *response* body, which this
+// guard cannot prevent: the route returns the generated image as base64 JSON
+// (~1.33x the binary size), and the size of a generated image is not a function
+// of the size of the input. See the README's deployment notes.
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const MAX_IMAGE_LABEL = "4MB";
 
-const formatBytes = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+const formatBytes = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
 
 // Returns an error message when the file is too large to send, otherwise null.
 const getSizeError = (file: File): string | null =>
@@ -31,6 +36,11 @@ export default function Home() {
   const [submitMessage, setSubmitMessage] = useState<string>("");
   const [imageHistory, setImageHistory] = useState<ImageHistoryItem[]>([]);
   const [responseText, setResponseText] = useState<string | null>(null);
+
+  const messageClasses = `p-3 rounded-lg text-sm ${submitMessage.startsWith('Success')
+    ? 'bg-green-100 text-green-700 border border-green-200'
+    : 'bg-red-100 text-red-700 border border-red-200'
+  }`;
 
   // Helper function to convert data URL to File
   const dataURLtoFile = async (dataurl: string, filename: string): Promise<File> => {
@@ -96,7 +106,9 @@ export default function Home() {
     // before the request leaves the browser.
     const sizeError = getSizeError(selectedFile);
     if (sizeError) {
-      setSubmitMessage(`${sizeError} Upload a smaller image to continue editing.`);
+      setSubmitMessage(
+        `${sizeError} Revert to an earlier image in the History strip below, or reload to start over.`
+      );
       return;
     }
 
@@ -144,7 +156,7 @@ export default function Home() {
             const nextSizeError = getSizeError(newFile);
             if (nextSizeError) {
               setSubmitMessage(
-                `${nextSizeError} This result is too large to edit further - upload a smaller image to keep going.`
+                `${nextSizeError} This result is too large to edit further - revert to an earlier image in the History strip below, or reload to start over.`
               );
             }
           } catch (error) {
@@ -202,7 +214,7 @@ export default function Home() {
               </div>
 
               {submitMessage && (
-                <div className="max-w-2xl mx-auto p-3 rounded-lg text-sm bg-red-100 text-red-700 border border-red-200">
+                <div className={`max-w-2xl mx-auto ${messageClasses}`}>
                   {submitMessage}
                 </div>
               )}
@@ -241,10 +253,7 @@ export default function Home() {
                 </div>
                 
                 {submitMessage && (
-                  <div className={`p-3 rounded-lg text-sm ${submitMessage.startsWith('Success') 
-                    ? 'bg-green-100 text-green-700 border border-green-200' 
-                    : 'bg-red-100 text-red-700 border border-red-200'
-                  }`}>
+                  <div className={messageClasses}>
                     {submitMessage}
                   </div>
                 )}
