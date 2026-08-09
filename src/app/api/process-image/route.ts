@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
+import { GeminiSafetyBlockError, mapGeminiError } from '@/lib/gemini-errors';
 
 const genAI = new GoogleGenAI({
   apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || ''
@@ -82,6 +83,18 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Gemini doesn't throw when it blocks a response for safety reasons - it
+    // returns a normal 200 with promptFeedback.blockReason and/or a
+    // finishReason on the (empty) candidate instead. Surface that the same
+    // way as any other failure by routing it through the shared error
+    // mapping, rather than reporting a false "success" with no image.
+    const blockReason = response.promptFeedback?.blockReason;
+    const finishReason = response.candidates?.[0]?.finishReason;
+    const SAFETY_FINISH_REASONS = new Set(['SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII']);
+    if (!generatedImageData && (blockReason || (finishReason && SAFETY_FINISH_REASONS.has(finishReason)))) {
+      throw new GeminiSafetyBlockError(String(blockReason ?? finishReason));
+    }
+
     // Return the processed result
     return NextResponse.json({
       success: true,
@@ -93,10 +106,14 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
+    // Always log the full, raw error server-side (visible in Vercel logs) so
+    // it stays debuggable - only the response sent to the client is sanitised.
     console.error('Error processing with Nano Banana:', error);
+
+    const { status, message, kind, retryDelaySeconds } = mapGeminiError(error);
     return NextResponse.json(
-      { error: 'Failed to process image with Nano Banana: ' + (error as Error).message },
-      { status: 500 }
+      { error: message, errorKind: kind, retryDelaySeconds },
+      { status }
     );
   }
 }

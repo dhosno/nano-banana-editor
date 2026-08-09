@@ -40,6 +40,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# scratch output from local Playwright CLI browser sessions
+/.playwright-cli/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
