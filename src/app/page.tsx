@@ -9,6 +9,25 @@ interface ImageHistoryItem {
   timestamp: number;
 }
 
+// Vercel rejects serverless function request bodies larger than 4.5 MB with a
+// 413 before the route handler ever runs, so the API cannot return a useful
+// error. Guard on the client with headroom for multipart form overhead.
+//
+// Note that the same 4.5 MB cap also applies to the *response* body, which this
+// guard cannot prevent: the route returns the generated image as base64 JSON
+// (~1.33x the binary size), and the size of a generated image is not a function
+// of the size of the input. See the README's deployment notes.
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+const MAX_IMAGE_LABEL = "4MB";
+
+const formatBytes = (bytes: number): string => `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
+
+// Returns an error message when the file is too large to send, otherwise null.
+const getSizeError = (file: File): string | null =>
+  file.size > MAX_IMAGE_BYTES
+    ? `Image is too large (${formatBytes(file.size)}). The maximum upload size is ${MAX_IMAGE_LABEL}.`
+    : null;
+
 export default function Home() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -17,6 +36,11 @@ export default function Home() {
   const [submitMessage, setSubmitMessage] = useState<string>("");
   const [imageHistory, setImageHistory] = useState<ImageHistoryItem[]>([]);
   const [responseText, setResponseText] = useState<string | null>(null);
+
+  const messageClasses = `p-3 rounded-lg text-sm ${submitMessage.startsWith('Success')
+    ? 'bg-green-100 text-green-700 border border-green-200'
+    : 'bg-red-100 text-red-700 border border-red-200'
+  }`;
 
   // Helper function to convert data URL to File
   const dataURLtoFile = async (dataurl: string, filename: string): Promise<File> => {
@@ -50,6 +74,17 @@ export default function Home() {
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
+      const sizeError = getSizeError(file);
+      if (sizeError) {
+        // Allow re-selecting the same file after the error is shown.
+        event.target.value = "";
+        setSelectedFile(null);
+        setSelectedImage(null);
+        setSubmitMessage(`${sizeError} Please choose a smaller image.`);
+        return;
+      }
+
+      setSubmitMessage("");
       setSelectedFile(file);
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -64,6 +99,16 @@ export default function Home() {
     
     if (!selectedFile || !instructions.trim()) {
       setSubmitMessage("Please provide both an image and instructions.");
+      return;
+    }
+
+    // Catch every path into the API (initial upload, generated result, revert)
+    // before the request leaves the browser.
+    const sizeError = getSizeError(selectedFile);
+    if (sizeError) {
+      setSubmitMessage(
+        `${sizeError} Revert to an earlier image in the History strip below, or reload to start over.`
+      );
       return;
     }
 
@@ -104,6 +149,16 @@ export default function Home() {
           try {
             const newFile = await dataURLtoFile(result.generatedImage, `edited_${Date.now()}.png`);
             setSelectedFile(newFile);
+
+            // Each generated PNG becomes the next request's input, so the
+            // payload can grow across iterations. Warn as soon as the result
+            // exceeds the limit instead of failing on the next submit.
+            const nextSizeError = getSizeError(newFile);
+            if (nextSizeError) {
+              setSubmitMessage(
+                `${nextSizeError} This result is too large to edit further - revert to an earlier image in the History strip below, or reload to start over.`
+              );
+            }
           } catch (error) {
             console.error('Error converting generated image to file:', error);
           }
@@ -137,24 +192,32 @@ export default function Home() {
 
         <div className="space-y-8">
           {!selectedImage && (
-            <div className="flex items-center justify-center">
-              <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 transition-colors">
-                <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                  <svg className="w-8 h-8 mb-4 text-gray-500" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 16">
-                    <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 13h3a3 3 0 0 0 0-6h-.025A5.56 5.56 0 0 0 16 6.5 5.5 5.5 0 0 0 5.207 5.021C5.137 5.017 5.071 5 5 5a4 4 0 0 0 0 8h2.167M10 15V6m0 0L8 8m2-2 2 2"/>
-                  </svg>
-                  <p className="mb-2 text-sm text-gray-500">
-                    <span className="font-semibold">Click to upload</span>
-                  </p>
-                  <p className="text-xs text-gray-500">PNG, JPG, GIF up to 10MB</p>
+            <div className="space-y-4">
+              <div className="flex items-center justify-center">
+                <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 transition-colors">
+                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                    <svg className="w-8 h-8 mb-4 text-gray-500" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 16">
+                      <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 13h3a3 3 0 0 0 0-6h-.025A5.56 5.56 0 0 0 16 6.5 5.5 5.5 0 0 0 5.207 5.021C5.137 5.017 5.071 5 5 5a4 4 0 0 0 0 8h2.167M10 15V6m0 0L8 8m2-2 2 2"/>
+                    </svg>
+                    <p className="mb-2 text-sm text-gray-500">
+                      <span className="font-semibold">Click to upload</span>
+                    </p>
+                    <p className="text-xs text-gray-500">PNG, JPG, GIF up to {MAX_IMAGE_LABEL}</p>
+                  </div>
+                  <input 
+                    type="file" 
+                    className="hidden" 
+                    accept="image/*"
+                    onChange={handleImageUpload}
+                  />
+                </label>
+              </div>
+
+              {submitMessage && (
+                <div className={`max-w-2xl mx-auto ${messageClasses}`}>
+                  {submitMessage}
                 </div>
-                <input 
-                  type="file" 
-                  className="hidden" 
-                  accept="image/*"
-                  onChange={handleImageUpload}
-                />
-              </label>
+              )}
             </div>
           )}
 
@@ -190,10 +253,7 @@ export default function Home() {
                 </div>
                 
                 {submitMessage && (
-                  <div className={`p-3 rounded-lg text-sm ${submitMessage.startsWith('Success') 
-                    ? 'bg-green-100 text-green-700 border border-green-200' 
-                    : 'bg-red-100 text-red-700 border border-red-200'
-                  }`}>
+                  <div className={messageClasses}>
                     {submitMessage}
                   </div>
                 )}

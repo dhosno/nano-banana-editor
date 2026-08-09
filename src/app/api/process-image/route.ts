@@ -5,6 +5,19 @@ const genAI = new GoogleGenAI({
   apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || ''
 });
 
+// The Gemini image call is awaited synchronously, so the request stays open for
+// the whole generation. Run on the Node.js runtime (the Edge runtime cannot be
+// used with the @google/genai SDK's Node dependencies) and raise the function
+// timeout.
+//
+// 300s is the maximum duration allowed on Vercel's Hobby plan (and the default
+// on Pro/Enterprise, which allow more), so this value is valid on every plan.
+// Note: Hobby only reaches 300s with fluid compute, which is enabled by default
+// for new projects. On a legacy project with fluid compute disabled the ceiling
+// is 60s and the build will reject this value — lower it to 60 if that happens.
+export const runtime = 'nodejs';
+export const maxDuration = 300;
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
@@ -64,7 +77,7 @@ export async function POST(request: NextRequest) {
         responseText = part.text;
         console.log('Response text:', part.text);
       } else if (part.inlineData) {
-        generatedImageData = part.inlineData.data;
+        generatedImageData = part.inlineData.data ?? null;
         console.log('Generated image received (base64 length):', part.inlineData.data?.length || 0);
       }
     }
