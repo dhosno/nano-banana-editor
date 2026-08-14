@@ -207,15 +207,26 @@ The app is a standard Next.js application and can be deployed to any platform th
 
 ## 🤖 Cloud Factory Automation
 
-This repository consumes Cloud Factory skills from the canonical [`warpdotdev-demos/cloud-factory-demo`](https://github.com/warpdotdev-demos/cloud-factory-demo) repository.
+This fork contains a minimal [Oz Cloud Factory](https://www.warp.dev/blog/how-to-build-a-cloud-software-factory-the-automatic-triage-skill):
 
-To install or refresh the Triage and Implementation skills and workflow templates locally, run:
-
-```bash
-./scripts/bootstrap-cloud-factory.sh
+```text
+new issue -> read-only triage -> label/comment -> implementation -> pull request -> human review
 ```
 
-The bootstrap script uses `npx skills install` to install the canonical skills into this repo and copies the workflow templates from `cloud-factory-demo`. Configure the `WARP_API_KEY` GitHub Actions secret before enabling the workflows.
+- `.github/workflows/triage-issues.yml` runs for newly opened issues from the owner, organization members, or repository collaborators. Public issues from untrusted accounts do not start billable agents. The Oz agent can read the issue and repository but cannot write to either. A separate deterministic job applies exactly one triage-state label and posts the agent's comment.
+- A `Ready to implement` result explicitly dispatches `.github/workflows/implement-ready-issues.yml`. This avoids GitHub's suppression of most follow-up workflow events created with the built-in `GITHUB_TOKEN`; no personal access token is required.
+- `.agents/skills/implementation/SKILL.md` directs Oz to make a bounded change, run `npm ci`, lint, tests, and the production build, then open a pull request. The Actions job remains alive until the asynchronous Oz run finishes so its short-lived GitHub token stays valid. A dispatch is skipped when a pull request already closes the issue unless a human explicitly sets the manual `force` input.
+- The other three states are parked for human action. This Part 1 demo does not automate specification, review, verification, or merge work.
+
+### Setup and operating boundaries
+
+1. Create the labels `Ready to implement`, `Ready to spec`, `Needs info`, and `Wait to implement`.
+2. Store an Oz API key as the repository Actions secret `WARP_API_KEY`. For a personal demo, runs use the key owner's Oz credits and GitHub attribution. Never commit this key.
+3. Protect the default branch: require pull requests and at least one approving human review, disallow bypasses, and block force pushes and deletions.
+4. Enable GitHub Actions and allow Actions to create pull requests.
+5. Merge the workflow files into the default branch. Opening an issue after activation starts a billable Oz triage run; a ready issue starts a second billable implementation run.
+
+The triage agent has read-only repository and issue permissions. Only the deterministic apply job can apply the triage label/comment and dispatch the fixed implementation workflow. The implementation job can write branches, issue comments, and pull requests; its skill forbids direct default-branch pushes or merges, and branch protection enforces the human-review boundary. To stop the demo, disable the workflows and remove or rotate `WARP_API_KEY`.
 
 ## 🤝 Contributing
 

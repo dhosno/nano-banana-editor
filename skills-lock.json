@@ -1,65 +1,17 @@
 {
   "version": 1,
   "skills": {
-    "Triage": {
-      "source": "warpdotdev-demos/cloud-factory-demo",
-      "sourceType": "github",
-      "skillPath": ".agents/skills/Triage/SKILL.md",
-      "computedHash": "b5c28bef4261a71cd1401f56529527ca7635c9bc3024eaa80c6e6669675ab56a"
-    },
     "implementation": {
       "source": "warpdotdev-demos/cloud-factory-demo",
       "sourceType": "github",
       "skillPath": ".agents/skills/implementation/SKILL.md",
-      "computedHash": "3204ef1974389917ac8d6e3a9fc073b5d7eba2e9c28f8bba498a26a6de21ebe3"
-    },
-    "improve-review-pr": {
-      "source": "warpdotdev-demos/cloud-factory-demo",
-      "sourceType": "github",
-      "skillPath": ".agents/skills/improve-review-pr/SKILL.md",
-      "computedHash": "7fa916cfec966e03f51c3ff9ce33f43a0f9325526013c61346778b6e50b0b23f"
-    },
-    "review-pr": {
-      "source": "warpdotdev-demos/cloud-factory-demo",
-      "sourceType": "github",
-      "skillPath": ".agents/skills/review-pr/SKILL.md",
-      "computedHash": "2a8d700f02a14beb62e0782a97bfb0bd25ea107ee753a9c64230711dc48826d2"
-    },
-    "spec": {
-      "source": "warpdotdev-demos/cloud-factory-demo",
-      "sourceType": "github",
-      "skillPath": ".agents/skills/spec/SKILL.md",
-      "computedHash": "8cfafe982928df3a9ac1790b174fd25c01991149d07948a59f8a278a750fe1c8"
+      "computedHash": "5bfc923bf0cdefefdcf473c293e9eccab69425efa2f599707f8f21eec5cffe6"
     },
     "triage": {
       "source": "warpdotdev-demos/cloud-factory-demo",
       "sourceType": "github",
       "skillPath": ".agents/skills/triage/SKILL.md",
-      "computedHash": "9d09a4337445ba07ffe93761140cb485200c4e338e6f51d2ba039c1dbbb86abd"
-    },
-    "validate-changes-match-specs": {
-      "source": "warpdotdev/common-skills",
-      "sourceType": "github",
-      "skillPath": ".agents/skills/validate-changes-match-specs/SKILL.md",
-      "computedHash": "9123fd70ced064bdd773fd8d2baa8d5d5291fef910eb2c028084074b3ac72c27"
-    },
-    "verify-behavior": {
-      "source": "warpdotdev-demos/cloud-factory-demo",
-      "sourceType": "github",
-      "skillPath": ".agents/skills/verify-behavior/SKILL.md",
-      "computedHash": "f92368bc250849ac83eee2df0c2a6602b7f049765484322943fe692976bf9dba"
-    },
-    "write-product-spec": {
-      "source": "warpdotdev/common-skills",
-      "sourceType": "github",
-      "skillPath": ".agents/skills/write-product-spec/SKILL.md",
-      "computedHash": "f20d141e67057570b1fe7c902d5e563415c5ae4a72027d069550ff5b4c5917f2"
-    },
-    "write-tech-spec": {
-      "source": "warpdotdev/common-skills",
-      "sourceType": "github",
-      "skillPath": ".agents/skills/write-tech-spec/SKILL.md",
-      "computedHash": "c7913bfd1ea2be7ce38d5beb7e923b96f5689f6145250af1d81b985e8be4a882"
+      "computedHash": "0e99b285a1c78e553bfeb88b1ae2bd2e63ba5cf32f699c754c508a25991a8d0b"
     }
   }
 }

@@ -4,7 +4,8 @@ name: Triage New Issues
 #
 # The agent runs read-only (issues: read) and emits a structured JSON result;
 # the separate `apply` job (issues: write) applies the label and comment to the
-# triggering issue only.
+# triggering issue only. Ready issues are handed off with workflow_dispatch
+# because GitHub suppresses most follow-up events created by GITHUB_TOKEN.
 #
 # Cloud note: `warpdotdev/oz-agent-action` with `cloud: true` returns as soon as
 # the Oz run is spawned (`agent_output` is launch metadata, not the final
@@ -27,6 +28,10 @@ jobs:
   triage:
     name: Triage issue
     runs-on: ubuntu-latest
+    if: >-
+      github.event.issue.author_association == 'OWNER' ||
+      github.event.issue.author_association == 'MEMBER' ||
+      github.event.issue.author_association == 'COLLABORATOR'
     permissions:
       contents: read # let the agent inspect the checked-out codebase
       issues: read # let the agent read the issue/comments/labels — never write
@@ -34,10 +39,10 @@ jobs:
       triage_result: ${{ steps.wait_triage.outputs.agent_output }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Triage with Oz agent
-        uses: warpdotdev/oz-agent-action@v1.0.25
+        uses: warpdotdev/oz-agent-action@89f7386434035ba0487f56a47c3e562fa4c60efb # v1.0.25
         id: triage
         env:
           GH_TOKEN: ${{ github.token }}
@@ -57,19 +62,11 @@ jobs:
             checked-out codebase, then choose exactly one
             implementation-readiness state.
 
-            If the issue is a UI/interactive bug (or mentions screenshots, video,
-            computer use, browser use, drag-and-drop, or verify-behavior), optionally
-            invoke `.agents/skills/verify-behavior` in `reproduce` mode with computer
-            use enabled before deciding. Prefer visual evidence when it materially
-            improves the readiness decision.
-
             Return the JSON result the skill specifies as your final response;
             the apply job applies the label and comment from it. Do not comment
             on, label, or otherwise mutate the issue directly from this job.
           warp_api_key: ${{ secrets.WARP_API_KEY }}
-          profile: ${{ vars.WARP_AGENT_PROFILE || '' }}
           cloud: true
-          computer_use: true
 
       # oz-agent-action@v1.0.25 sets agent_output to `oz agent run-cloud` stdout.
       # For cloud runs that stdout is spawn metadata while the remote agent is
@@ -86,7 +83,7 @@ jobs:
         env:
           WARP_API_KEY: ${{ secrets.WARP_API_KEY }}
           SPAWN_OUTPUT: ${{ steps.triage.outputs.agent_output }}
-          # Computer-use triage can take several minutes; allow headroom.
+          # Cloud triage can take several minutes; allow headroom.
           POLL_INTERVAL_SECONDS: "20"
           POLL_TIMEOUT_SECONDS: "3600"
         run: |
@@ -122,13 +119,18 @@ jobs:
               return last
 
           def write_output(text: str) -> None:
-              # Multiline GitHub Actions output via heredoc.
+              # Forward only normalized single-line JSON. Never write arbitrary
+              # model text or a model-controlled output delimiter.
+              result = find_triage_json(text)
+              if result is None:
+                  raise ValueError("No triage JSON found in agent output")
+              compact = json.dumps(
+                  result,
+                  ensure_ascii=False,
+                  separators=(",", ":"),
+              )
               with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-                  fh.write("agent_output<<EOF_AGENT_OUTPUT\n")
-                  fh.write(text)
-                  if text and not text.endswith("\n"):
-                      fh.write("\n")
-                  fh.write("EOF_AGENT_OUTPUT\n")
+                  fh.write(f"agent_output={compact}\n")
 
           def oz_json(args):
               """Run an oz CLI command expecting JSON. Returns (raw, parsed, error)."""
@@ -352,6 +354,7 @@ jobs:
     needs: triage
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       issues: write
     steps:
       - name: Apply label and comment
@@ -359,6 +362,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           TRIAGE_RESULT: ${{ needs.triage.outputs.triage_result }}
         run: |
           set -euo pipefail
@@ -403,9 +407,6 @@ jobs:
           STATE="$(jq -r '.state // ""' triage_result.json)"
           LABEL="$(jq -r '.label // ""' triage_result.json)"
 
-          # Require the structured fields the apply step needs. The set of valid
-          # states/labels is owned by the triage skill, so it is intentionally
-          # not duplicated here.
           if [ -z "$STATE" ]; then
             echo "::error::Triage result is missing a 'state'." >&2
             exit 1
@@ -416,15 +417,38 @@ jobs:
             exit 1
           fi
 
+          # Only the four configured triage labels are accepted. This keeps
+          # untrusted agent output from choosing arbitrary repository labels.
+          case "$STATE" in
+            "Ready to implement"|"Ready to spec"|"Needs info"|"Wait to implement")
+              ;;
+            *)
+              echo "::error::Unsupported triage state: $STATE" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ "$LABEL" != "$STATE" ]; then
+            echo "::error::Label '$LABEL' does not match triage state '$STATE'." >&2
+            exit 1
+          fi
+
           echo "Triage state: $STATE"
           echo "Applying label: $LABEL"
 
-          # Remove any superseded triage-state labels the agent listed. Failures
-          # (e.g. a label that is not present) are non-fatal.
+          # Remove only superseded triage-state labels. Agent output cannot
+          # remove unrelated labels from the issue.
           while IFS= read -r remove_label; do
             [ -z "$remove_label" ] && continue
-            echo "Removing label: $remove_label"
-            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label "$remove_label" || true
+            case "$remove_label" in
+              "Ready to implement"|"Ready to spec"|"Needs info"|"Wait to implement")
+                echo "Removing label: $remove_label"
+                gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label "$remove_label" || true
+                ;;
+              *)
+                echo "Ignoring non-triage removal request: $remove_label"
+                ;;
+            esac
           done < <(jq -r '(.remove_labels // [])[]' triage_result.json)
 
           # Apply the chosen triage-state label to the triggering issue only.
@@ -436,4 +460,14 @@ jobs:
             gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file comment.md
           else
             echo "No comment body provided by triage result; skipping comment."
+          fi
+
+          if [ "$STATE" = "Ready to implement" ]; then
+            echo "Dispatching implementation for issue #$ISSUE_NUMBER"
+            gh workflow run implement-ready-issues.yml \
+              --repo "$REPO" \
+              --ref "$DEFAULT_BRANCH" \
+              -f "issue_number=$ISSUE_NUMBER"
+          else
+            echo "Issue is not ready to implement; no downstream workflow dispatched."
           fi
