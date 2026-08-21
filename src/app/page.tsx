@@ -76,8 +76,7 @@ function LandingHero() {
         🍌 Nano Banana Editor
       </h1>
       <p className="mx-auto mt-4 max-w-2xl text-lg text-slate-600">
-        Upload a photo, describe an edit in plain English, and Google&apos;s Gemini &ldquo;Nano
-        Banana&rdquo; image model rewrites it — then keep iterating on the result, edit after edit.
+        Upload a photo, describe the result you want, and iterate with Gemini-powered image editing.
       </p>
     </section>
   );
