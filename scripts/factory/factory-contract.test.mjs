@@ -82,6 +82,11 @@ test("behavioral scenarios use a strict prompt, schema, runner, and evidence gat
   assert.match(prompt, /separate trusted runner/);
   assert.deepEqual(schema.properties.mode.enum, ["browser", "not-applicable"]);
   assert.equal(schema.properties.steps.maxItems, 12);
+  for (const branch of schema.properties.steps.items.anyOf) {
+    for (const property of Object.values(branch.properties)) {
+      assert.ok(property.type, "strict output schema properties require a type");
+    }
+  }
   assert.match(runner, /SCENARIO_BASE_URL/);
 });
 
