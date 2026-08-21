@@ -27,6 +27,7 @@ for (const path of [
   "package-lock.json",
   "npm-shrinkwrap.json",
   ".npmrc",
+  ".gitattributes",
   "AGENTS.md",
   "src/AGENTS.override.md",
   ".codex/config.toml",

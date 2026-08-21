@@ -18,6 +18,7 @@ const PROTECTED_FILES = new Set([
   "bun.lockb",
   "deno.lock",
   ".npmrc",
+  ".gitattributes",
   ".yarnrc",
   ".yarnrc.yml",
   ".pnpmfile.cjs",
