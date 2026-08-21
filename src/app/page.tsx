@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useState } from "react";
+import { hasInstructions } from "@/lib/instructions";
 
 interface ImageHistoryItem {
   image: string;
@@ -86,6 +87,7 @@ export default function Home() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [instructions, setInstructions] = useState<string>("");
+  const [instructionsCleared, setInstructionsCleared] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<StatusMessage | null>(null);
   const [imageHistory, setImageHistory] = useState<ImageHistoryItem[]>([]);
@@ -116,6 +118,7 @@ export default function Home() {
       // Clear any messages and set instructions hint
       setStatusMessage({ kind: "info", text: `Reverted to image #${index + 1} - "${historyItem.prompt}"` });
       setInstructions("");
+      setInstructionsCleared(false);
       setResponseText(null);
       
     } catch (error) {
@@ -138,6 +141,7 @@ export default function Home() {
       }
 
       setStatusMessage(null);
+      setInstructionsCleared(false);
       setSelectedFile(file);
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -223,6 +227,7 @@ export default function Home() {
           
           // Clear instructions for next iteration
           setInstructions("");
+          setInstructionsCleared(false);
         }
       } else {
         // result.error is already a friendly, human-readable message from the
@@ -312,15 +317,37 @@ export default function Home() {
                     <label htmlFor="instructions" className="block text-sm font-medium text-slate-700 mb-2">
                       Edit Instructions
                     </label>
-                    <input
-                      type="text"
-                      id="instructions"
-                      value={instructions}
-                      onChange={(e) => setInstructions(e.target.value)}
-                      placeholder="Describe how you want to edit this image..."
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-transparent outline-none transition-colors"
-                      disabled={isSubmitting}
-                    />
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input
+                        type="text"
+                        id="instructions"
+                        value={instructions}
+                        onChange={(e) => {
+                          setInstructions(e.target.value);
+                          setInstructionsCleared(false);
+                        }}
+                        placeholder="Describe how you want to edit this image..."
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-transparent outline-none transition-colors"
+                        disabled={isSubmitting}
+                      />
+                      <button
+                        type="button"
+                        aria-label="Clear instructions"
+                        disabled={isSubmitting || !hasInstructions(instructions)}
+                        onClick={() => {
+                          setInstructions("");
+                          setInstructionsCleared(true);
+                        }}
+                        className="shrink-0 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:ring-2 focus:ring-violet-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                      >
+                        Clear instructions
+                      </button>
+                    </div>
+                    {instructionsCleared && (
+                      <p className="mt-2 text-sm text-emerald-700" role="status">
+                        Instructions cleared.
+                      </p>
+                    )}
                   </div>
                   
                   {statusMessage && (
@@ -333,7 +360,7 @@ export default function Home() {
                   <div className="flex justify-center">
                     <button
                       type="submit"
-                      disabled={isSubmitting || !instructions.trim()}
+                      disabled={isSubmitting || !hasInstructions(instructions)}
                       className="px-6 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 focus:ring-2 focus:ring-violet-500 focus:ring-offset-2 transition-colors font-medium disabled:bg-slate-400 disabled:cursor-not-allowed"
                     >
                       {isSubmitting ? 'Processing with Nano Banana...' : 'Process with AI'}
