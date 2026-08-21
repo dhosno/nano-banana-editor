@@ -2,7 +2,9 @@ name: Codex Issue Factory
 
 on:
   issues:
-    types: [opened]
+    types: [opened, edited]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       issue_number:
@@ -18,19 +20,67 @@ jobs:
   triage:
     name: Triage issue
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.issue.author_association == 'OWNER' ||
-      github.event.issue.author_association == 'MEMBER' ||
-      github.event.issue.author_association == 'COLLABORATOR'
+      github.ref_name == github.event.repository.default_branch &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'issues' &&
+          (
+            (
+              github.event.action == 'opened' &&
+              (
+                github.event.issue.author_association == 'OWNER' ||
+                github.event.issue.author_association == 'MEMBER' ||
+                github.event.issue.author_association == 'COLLABORATOR'
+              )
+            ) ||
+            (
+              github.event.action == 'edited' &&
+              contains(github.event.issue.labels.*.name, 'factory:needs-info')
+            )
+          )
+        ) ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request == null &&
+          contains(github.event.issue.labels.*.name, 'factory:needs-info') &&
+          (
+            github.event.comment.author_association == 'OWNER' ||
+            github.event.comment.author_association == 'MEMBER' ||
+            github.event.comment.author_association == 'COLLABORATOR'
+          )
+        )
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       issues: write
+      pull-requests: read
     outputs:
       state: ${{ steps.apply.outputs.state }}
       issue_number: ${{ steps.issue.outputs.number }}
+      issue_attempt: ${{ steps.artifact_identity.outputs.attempt }}
     steps:
+      - name: Verify triggering actor has write access
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          permission="$(
+            gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq '.permission'
+          )"
+          case "$permission" in
+            admin|maintain|write)
+              ;;
+            *)
+              echo "::error::$ACTOR has $permission access; write access is required"
+              exit 1
+              ;;
+          esac
+
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -51,16 +101,89 @@ jobs:
           mkdir -p .factory
           gh issue view "$ISSUE_NUMBER" \
             --repo "$REPO" \
-            --json number,title,body,url,state,author,labels \
-            > .factory/issue.json
+            --json number,title,body,url,state,author,labels,comments \
+            > .factory/issue-raw.json
+          jq '{
+            number,
+            title,
+            body,
+            url,
+            state,
+            author: .author.login,
+            labels: [.labels[] | .name],
+            comments: [
+              (
+                .comments |
+                map(
+                  select(
+                    .authorAssociation == "OWNER" or
+                    .authorAssociation == "MEMBER" or
+                    .authorAssociation == "COLLABORATOR"
+                  )
+                ) |
+                .[-5:]
+              )[]? |
+              {
+                author: .author.login,
+                authorAssociation,
+                body: ((.body // "")[0:1999]),
+                createdAt
+              }
+            ]
+          }' .factory/issue-raw.json > .factory/issue.json
+          rm .factory/issue-raw.json
           jq -e '
             .state == "OPEN" and
             (.title | length <= 200) and
-            ((.body // "") | length <= 10000)
+            ((.body // "") | length <= 10000) and
+            ([.comments[].body] | join("\n") | length <= 10000)
           ' .factory/issue.json > /dev/null
           echo "number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
 
+      - name: Prevent duplicate factory pull requests
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+        run: |
+          set -euo pipefail
+          labels_json="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels)"
+          if jq -e 'any(.labels[]; .name == "factory:done")' \
+            <<<"$labels_json" > /dev/null; then
+            echo "::notice::Issue already has the terminal factory:done state"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          prefix="codex/issue-${ISSUE_NUMBER}-"
+          existing_pr="$(
+            gh pr list \
+              --repo "$REPO" \
+              --state open \
+              --limit 1000 \
+              --json author,headRefName,headRepository,isCrossRepository,url |
+              jq -r --arg prefix "$prefix" --arg repo "$REPO" '
+                [
+                  .[] |
+                  select(
+                    (.isCrossRepository | not) and
+                    .author.login == "app/github-actions" and
+                    .headRepository.nameWithOwner == $repo and
+                    (.headRefName | test("^" + $prefix + "[0-9]+-[0-9]+$"))
+                  )
+                ][0].url // empty
+              '
+          )"
+          if [ -n "$existing_pr" ]; then
+            echo "::notice::Factory pull request already open: $existing_pr"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Triage with Codex
+        if: steps.guard.outputs.skip != 'true'
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -74,6 +197,7 @@ jobs:
 
       - name: Apply triage state
         id: apply
+        if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -105,9 +229,18 @@ jobs:
             --description "Needs human clarification" --force
           gh label create "factory:wait" --repo "$REPO" --color "FBCA04" \
             --description "Parked for human review" --force
+          gh label create "factory:pr-open" --repo "$REPO" --color "1D76DB" \
+            --description "Factory pull request is open" --force
+          gh label create "factory:done" --repo "$REPO" --color "5319E7" \
+            --description "Factory pull request was merged" --force
 
           labels_json="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels)"
-          for old_label in "factory:ready" "factory:needs-info" "factory:wait"; do
+          for old_label in \
+            "factory:ready" \
+            "factory:needs-info" \
+            "factory:wait" \
+            "factory:pr-open" \
+            "factory:done"; do
             if jq -e --arg label "$old_label" \
               'any(.labels[]; .name == $label)' <<<"$labels_json" > /dev/null; then
               gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
@@ -123,8 +256,21 @@ jobs:
             --body-file .factory/triage-comment.md
           echo "state=$state" >> "$GITHUB_OUTPUT"
 
+      - name: Record issue artifact identity
+        id: artifact_identity
+        run: echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable issue snapshot
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: codex-issue-${{ github.run_id }}-${{ steps.artifact_identity.outputs.attempt }}
+          path: .factory/issue.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
   generate:
-    name: Generate implementation patch
+    name: Build implementation with Codex
     needs: triage
     if: needs.triage.outputs.state == 'ready-to-implement'
     runs-on: ubuntu-latest
@@ -134,6 +280,7 @@ jobs:
       issues: read
     outputs:
       base_sha: ${{ steps.patch.outputs.base_sha }}
+      candidate_attempt: ${{ steps.artifact_identity.outputs.attempt }}
     steps:
       - name: Checkout immutable base
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -145,23 +292,21 @@ jobs:
       - name: Preserve trusted boundary checker
         run: cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
 
-      - name: Capture bounded issue context
+      - name: Download immutable issue snapshot
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-issue-${{ github.run_id }}-${{ needs.triage.outputs.issue_attempt }}
+          path: .factory
+
+      - name: Verify issue snapshot
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ needs.triage.outputs.issue_number }}
         run: |
           set -euo pipefail
-          mkdir -p .factory
-          gh issue view "$ISSUE_NUMBER" \
-            --repo "$REPO" \
-            --json number,title,body,url,state,author,labels \
-            > .factory/issue.json
-          jq -e '
-            .state == "OPEN" and
-            (.title | length <= 200) and
-            ((.body // "") | length <= 10000)
-          ' .factory/issue.json > /dev/null
+          # shellcheck disable=SC2016
+          jq -e --argjson number "$ISSUE_NUMBER" \
+            '.number == $number and .state == "OPEN"' \
+            .factory/issue.json > /dev/null
 
       - name: Implement with Codex
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
@@ -178,6 +323,14 @@ jobs:
         id: patch
         run: |
           set -euo pipefail
+          if [ ! -s .factory/implementation-summary.md ]; then
+            echo "::error::Codex did not produce an implementation summary"
+            exit 1
+          fi
+          if [ "$(wc -c < .factory/implementation-summary.md)" -gt 8000 ]; then
+            echo "::error::Codex implementation summary exceeds 8 KB"
+            exit 1
+          fi
           git add -N .
           node "$RUNNER_TEMP/check-boundaries.mjs"
           git diff HEAD --binary --full-index --no-ext-diff --no-renames \
@@ -190,20 +343,25 @@ jobs:
           printf '%s\n' "$base_sha" > .factory/base-sha
           echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
 
+      - name: Record candidate artifact identity
+        id: artifact_identity
+        run: echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
       - name: Upload immutable candidate patch
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: codex-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          name: codex-candidate-${{ github.run_id }}-${{ steps.artifact_identity.outputs.attempt }}
           path: |
             .factory/change.patch
             .factory/base-sha
             .factory/implementation-summary.md
           if-no-files-found: error
-          retention-days: 1
+          include-hidden-files: true
+          retention-days: 30
 
   validate:
     name: Validate candidate without write credentials
-    needs: generate
+    needs: [generate, evaluate]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -223,6 +381,9 @@ jobs:
       - name: Install trusted baseline dependencies
         run: npm ci
 
+      - name: Audit trusted dependency graph
+        run: npm audit --audit-level=high
+
       - name: Pull pinned isolated validation image
         run: docker pull node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
 
@@ -230,9 +391,9 @@ jobs:
         run: cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
 
       - name: Download immutable candidate patch
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: codex-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          name: codex-candidate-${{ github.run_id }}-${{ needs.generate.outputs.candidate_attempt }}
           path: .factory
 
       - name: Apply and recheck candidate
@@ -262,9 +423,295 @@ jobs:
             node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584 \
             bash -lc 'npm run lint && npm test && npm run build'
 
+  evaluate:
+    name: Evaluate candidate with Codex
+    needs: [triage, generate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.codex.outputs.final-message }}
+    steps:
+      - name: Checkout immutable base without persisted credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.generate.outputs.base_sha }}
+          persist-credentials: false
+
+      - name: Preserve trusted boundary checker
+        run: cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+
+      - name: Download immutable issue snapshot
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-issue-${{ github.run_id }}-${{ needs.triage.outputs.issue_attempt }}
+          path: .factory
+
+      - name: Download candidate patch
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-candidate-${{ github.run_id }}-${{ needs.generate.outputs.candidate_attempt }}
+          path: .factory
+
+      - name: Apply and recheck candidate
+        run: |
+          set -euo pipefail
+          test "$(cat .factory/base-sha)" = "$(git rev-parse HEAD)"
+          git apply --index --binary .factory/change.patch
+          node "$RUNNER_TEMP/check-boundaries.mjs"
+
+      - name: Evaluate issue satisfaction with Codex
+        id: codex
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/evaluate.md
+          output-schema-file: .github/codex/schemas/evaluation.schema.json
+          permission-profile: ":read-only"
+          safety-strategy: drop-sudo
+          codex-version: "0.144.1"
+          codex-args: '["--ephemeral"]'
+
+  scenario:
+    name: Prepare behavioral acceptance scenario
+    needs: [triage, generate, validate, evaluate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      scenario_attempt: ${{ steps.artifact_identity.outputs.attempt }}
+      mode: ${{ steps.scenario_contract.outputs.mode }}
+    steps:
+      - name: Checkout immutable base without persisted credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.generate.outputs.base_sha }}
+          persist-credentials: false
+
+      - name: Preserve trusted factory controllers
+        run: |
+          cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+          cp scripts/factory/run-scenario.mjs "$RUNNER_TEMP/run-scenario.mjs"
+
+      - name: Download immutable issue snapshot
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-issue-${{ github.run_id }}-${{ needs.triage.outputs.issue_attempt }}
+          path: .factory
+
+      - name: Download validated candidate patch
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-candidate-${{ github.run_id }}-${{ needs.generate.outputs.candidate_attempt }}
+          path: .factory
+
+      - name: Apply and recheck validated candidate
+        run: |
+          set -euo pipefail
+          test "$(cat .factory/base-sha)" = "$(git rev-parse HEAD)"
+          git apply --index --binary .factory/change.patch
+          node "$RUNNER_TEMP/check-boundaries.mjs"
+
+      - name: Translate acceptance criteria into a browser scenario
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/scenario.md
+          output-file: .factory/scenario.json
+          output-schema-file: .github/codex/schemas/scenario.schema.json
+          permission-profile: ":read-only"
+          safety-strategy: drop-sudo
+          codex-version: "0.144.1"
+          codex-args: '["--ephemeral"]'
+
+      - name: Validate bounded scenario
+        id: scenario_contract
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/run-scenario.mjs" --validate .factory/scenario.json
+          echo "mode=$(jq -r '.mode' .factory/scenario.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Record scenario artifact identity
+        id: artifact_identity
+        run: echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable behavioral scenario
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: codex-scenario-${{ github.run_id }}-${{ steps.artifact_identity.outputs.attempt }}
+          path: .factory/scenario.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+  scenario_test:
+    name: Run behavioral scenario against built application
+    needs: [generate, scenario]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      evidence_url: ${{ steps.evidence.outputs.artifact-url }}
+    steps:
+      - name: Checkout immutable base without persisted credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.generate.outputs.base_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "24"
+
+      - name: Install trusted baseline dependencies
+        run: npm ci
+
+      - name: Pull pinned scenario images
+        run: |
+          docker pull node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
+          docker pull mcr.microsoft.com/playwright@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
+
+      - name: Preserve trusted factory controllers
+        run: |
+          cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+          cp scripts/factory/run-scenario.mjs "$RUNNER_TEMP/run-scenario.mjs"
+
+      - name: Download immutable candidate patch
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-candidate-${{ github.run_id }}-${{ needs.generate.outputs.candidate_attempt }}
+          path: .factory/candidate
+
+      - name: Apply and recheck candidate
+        run: |
+          set -euo pipefail
+          test "$(cat .factory/candidate/base-sha)" = "$(git rev-parse HEAD)"
+          git apply --index --binary .factory/candidate/change.patch
+          node "$RUNNER_TEMP/check-boundaries.mjs"
+
+      - name: Build and start bounded scenario application before revealing acceptance checks
+        run: |
+          set -euo pipefail
+          network="codex-scenario-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          app="codex-scenario-app-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker network create --internal "$network"
+          docker run -d \
+            --name "$app" \
+            --network "$network" \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 512 \
+            --cpus 2 \
+            --memory 4g \
+            --read-only \
+            --tmpfs /tmp:rw,nosuid,size=512m \
+            --tmpfs /repo:rw,nosuid,nodev,size=2g,uid=1000,gid=1000,mode=0755 \
+            --user 1000:1000 \
+            --env HOME=/tmp \
+            --env NEXT_TELEMETRY_DISABLED=1 \
+            --volume "$GITHUB_WORKSPACE:/source:ro" \
+            --volume "$GITHUB_WORKSPACE/node_modules:/repo/node_modules:ro" \
+            --workdir /repo \
+            node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584 \
+            bash -lc 'tar -C /source --exclude=.git --exclude=.factory --exclude=.next --exclude=node_modules -cf - . | tar -C /repo -xf - && npm run build && exec npm start -- --hostname 0.0.0.0'
+
+          ready=false
+          for _ in {1..180}; do
+            if [ "$(docker inspect --format "{{.State.Running}}" "$app")" != "true" ]; then
+              docker logs "$app"
+              echo "::error::Scenario application exited during build or startup"
+              exit 1
+            fi
+            if docker exec "$app" node -e \
+              "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != "true" ]; then
+            docker logs "$app"
+            echo "::error::Scenario application did not become ready"
+            exit 1
+          fi
+
+      - name: Download immutable behavioral scenario after build
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-scenario-${{ github.run_id }}-${{ needs.scenario.outputs.scenario_attempt }}
+          path: ${{ runner.temp }}/scenario
+
+      - name: Validate behavioral scenario with trusted runner
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/run-scenario.mjs" \
+            --validate "$RUNNER_TEMP/scenario/scenario.json"
+
+      - name: Run isolated browser scenario
+        run: |
+          set -euo pipefail
+          network="codex-scenario-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          app="codex-scenario-app-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p .factory/scenario-evidence
+          chmod 0777 .factory/scenario-evidence
+          docker run --rm \
+            --network "$network" \
+            --user pwuser \
+            --shm-size 1gb \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 512 \
+            --cpus 2 \
+            --memory 3g \
+            --read-only \
+            --tmpfs /tmp:rw,nosuid,size=512m \
+            --env HOME=/tmp \
+            --env SCENARIO_BASE_URL="http://${app}:3000" \
+            --env SCENARIO_RESULT_PATH=/evidence/scenario-result.json \
+            --env SCENARIO_SCREENSHOT_PATH=/evidence/scenario-evidence.png \
+            --volume "$RUNNER_TEMP/run-scenario.mjs:/runner/run-scenario.mjs:ro" \
+            --volume "$GITHUB_WORKSPACE/node_modules/playwright:/runner/node_modules/playwright:ro" \
+            --volume "$GITHUB_WORKSPACE/node_modules/playwright-core:/runner/node_modules/playwright-core:ro" \
+            --volume "$RUNNER_TEMP/scenario/scenario.json:/scenario/scenario.json:ro" \
+            --volume "$GITHUB_WORKSPACE/.factory/scenario-evidence:/evidence:rw" \
+            --workdir /runner \
+            mcr.microsoft.com/playwright@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e \
+            node run-scenario.mjs /scenario/scenario.json
+
+          test -s .factory/scenario-evidence/scenario-result.json
+          test -s .factory/scenario-evidence/scenario-evidence.png
+          cp "$RUNNER_TEMP/scenario/scenario.json" \
+            .factory/scenario-evidence/scenario.json
+
+      - name: Upload browser scenario evidence
+        id: evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: codex-scenario-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .factory/scenario-evidence/scenario.json
+            .factory/scenario-evidence/scenario-result.json
+            .factory/scenario-evidence/scenario-evidence.png
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+
+      - name: Remove isolated scenario containers
+        if: always()
+        run: |
+          network="codex-scenario-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          app="codex-scenario-app-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker rm -f "$app" > /dev/null 2>&1 || true
+          docker network rm "$network" > /dev/null 2>&1 || true
+
   publish:
     name: Publish validated pull request
-    needs: [triage, generate, validate]
+    needs: [triage, generate, validate, evaluate, scenario, scenario_test]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -282,9 +729,9 @@ jobs:
         run: cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
 
       - name: Download validated candidate patch
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: codex-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          name: codex-candidate-${{ github.run_id }}-${{ needs.generate.outputs.candidate_attempt }}
           path: .factory
 
       - name: Apply validated patch without executing it
@@ -294,13 +741,43 @@ jobs:
           git apply --index --binary .factory/change.patch
           node "$RUNNER_TEMP/check-boundaries.mjs"
 
-      - name: Commit, push, and open pull request
-        id: pull_request
+      - name: Find an existing pull request from this run
+        id: existing_pr
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ needs.triage.outputs.issue_number }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          # shellcheck disable=SC2016
+          set -euo pipefail
+          prefix="codex/issue-${ISSUE_NUMBER}-${GITHUB_RUN_ID}-"
+          url="$(
+            gh pr list \
+              --repo "$REPO" \
+              --state open \
+              --limit 1000 \
+              --json author,headRefName,headRepository,isCrossRepository,url |
+              jq -r --arg prefix "$prefix" --arg repo "$REPO" '
+                [
+                  .[] |
+                  select(
+                    (.isCrossRepository | not) and
+                    .author.login == "app/github-actions" and
+                    .headRepository.nameWithOwner == $repo and
+                    (.headRefName | test("^" + $prefix + "[0-9]+$"))
+                  )
+                ][0].url // empty
+              '
+          )"
+          if [ -n "$url" ]; then
+            echo "url=$url" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push validated candidate
+        id: candidate
+        if: steps.existing_pr.outputs.url == ''
+        env:
+          ISSUE_NUMBER: ${{ needs.triage.outputs.issue_number }}
         run: |
           set -euo pipefail
           branch="codex/issue-${ISSUE_NUMBER}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -308,7 +785,69 @@ jobs:
           git config user.name "codex-factory[bot]"
           git config user.email "codex-factory[bot]@users.noreply.github.com"
           git commit -m "feat: implement issue #${ISSUE_NUMBER}"
+          head_sha="$(git rev-parse HEAD)"
           git push origin "$branch"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Create immutable candidate attestation
+        if: steps.existing_pr.outputs.url == ''
+        env:
+          ISSUE_NUMBER: ${{ needs.triage.outputs.issue_number }}
+          BASE_SHA: ${{ needs.generate.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.candidate.outputs.head_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          # shellcheck disable=SC2016
+          set -euo pipefail
+          jq -n \
+            --argjson issue "$ISSUE_NUMBER" \
+            --arg run "$GITHUB_RUN_ID" \
+            --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg base "$BASE_SHA" \
+            --arg head "$HEAD_SHA" \
+            --arg workflow "$WORKFLOW_SHA" \
+            '{
+              issue: $issue,
+              run: $run,
+              attempt: $attempt,
+              base: $base,
+              head: $head,
+              workflow: $workflow
+            }' > .factory/attestation.json
+
+      - name: Upload immutable candidate attestation
+        if: steps.existing_pr.outputs.url == ''
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: codex-attestation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .factory/attestation.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 90
+
+      - name: Open pull request and advance issue state
+        id: pull_request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ needs.triage.outputs.issue_number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVALUATION_JSON: ${{ needs.evaluate.outputs.result }}
+          SCENARIO_MODE: ${{ needs.scenario.outputs.mode }}
+          SCENARIO_EVIDENCE_URL: ${{ needs.scenario_test.outputs.evidence_url }}
+          CANDIDATE_BRANCH: ${{ steps.candidate.outputs.branch }}
+          EXISTING_PR_URL: ${{ steps.existing_pr.outputs.url }}
+        run: |
+          # shellcheck disable=SC2016
+          set -euo pipefail
+          printf '%s\n' "$EVALUATION_JSON" > .factory/evaluation.json
+          jq -e '
+            (.verdict == "pass" or .verdict == "needs-human") and
+            (.summary | type == "string" and length > 0) and
+            (.findings | type == "array" and length <= 5)
+          ' .factory/evaluation.json > /dev/null
+          verdict="$(jq -r '.verdict' .factory/evaluation.json)"
 
           issue_title="$(
             gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json title --jq '.title'
@@ -317,26 +856,70 @@ jobs:
             printf 'Closes #%s\n\n' "$ISSUE_NUMBER"
             cat <<'EOF'
           ## Summary
-          Implemented by the repository Codex factory.
+          EOF
+            cat .factory/implementation-summary.md
+            cat <<'EOF'
+
+          ## Codex evaluation
+          EOF
+            printf "**Verdict:** \`%s\`\n\n" "$verdict"
+            jq -r '.summary' .factory/evaluation.json
+            if jq -e '.findings | length > 0' \
+              .factory/evaluation.json > /dev/null; then
+              printf '\n\n### Findings\n'
+              jq -r '
+                .findings[] |
+                "- **\(.severity):** \(.message)" +
+                (if .path then " (`\(.path)`)" else "" end)
+              ' .factory/evaluation.json
+            fi
+            cat <<'EOF'
 
           ## Validation
           - `npm ci`
+          - `npm audit --audit-level=high`
           - `npm run lint`
           - `npm test`
           - `npm run build`
+          - Codex issue-satisfaction evaluation
+          EOF
+            printf -- "- Behavioral scenario (\`%s\`): %s\n\n" \
+              "$SCENARIO_MODE" \
+              "$SCENARIO_EVIDENCE_URL"
+            cat <<'EOF'
 
-          Human review is required; this workflow never merges pull requests.
+          Human review is required. A `needs-human` evaluation or
+          `not-applicable` browser scenario opens this as a draft. This workflow
+          never approves or merges pull requests.
           EOF
           } > .factory/pull-request.md
 
-          pr_url="$(
-            gh pr create \
-              --repo "$REPO" \
-              --base "$DEFAULT_BRANCH" \
-              --head "$branch" \
-              --title "Codex: $issue_title" \
-              --body-file .factory/pull-request.md
-          )"
+          pr_args=(
+            --repo "$REPO"
+            --base "$DEFAULT_BRANCH"
+            --head "$CANDIDATE_BRANCH"
+            --title "Codex: $issue_title"
+            --body-file .factory/pull-request.md
+          )
+          if [ "$verdict" = "needs-human" ] || [ "$SCENARIO_MODE" = "not-applicable" ]; then
+            pr_args+=(--draft)
+          fi
+          if [ -n "$EXISTING_PR_URL" ]; then
+            pr_url="$EXISTING_PR_URL"
+          else
+            pr_url="$(gh pr create "${pr_args[@]}")"
+          fi
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+
+          labels_json="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels)"
+          for old_label in "factory:ready" "factory:needs-info" "factory:wait"; do
+            if jq -e --arg label "$old_label" \
+              'any(.labels[]; .name == $label)' <<<"$labels_json" > /dev/null; then
+              gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
+                --remove-label "$old_label"
+            fi
+          done
+          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
+            --add-label "factory:pr-open"
           gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
-            --body "Codex opened an implementation pull request: $pr_url"
+            --body "Codex opened an implementation pull request ($verdict): $pr_url"

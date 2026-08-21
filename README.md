@@ -2,9 +2,9 @@
 
 **An AI-Powered Iterative Image Editor using Google's Gemini 2.5 Flash Image API**
 
-![Next.js](https://img.shields.io/badge/Next.js-15.5.2-000000?style=flat-square&logo=next.js)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.0-3178C6?style=flat-square&logo=typescript)
-![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.0-38B2AC?style=flat-square&logo=tailwind-css)
+![Next.js](https://img.shields.io/badge/Next.js-16.3.2-000000?style=flat-square&logo=next.js)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=flat-square&logo=typescript)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind-4-38B2AC?style=flat-square&logo=tailwind-css)
 ![Google AI](https://img.shields.io/badge/Google%20AI-Gemini%202.5-4285F4?style=flat-square&logo=google)
 
 ## ✨ Features
@@ -34,7 +34,7 @@
 
 ## 🛠️ Tech Stack
 
-- **Framework**: Next.js 15.5.2 with App Router
+- **Framework**: Next.js 16.3.2 with App Router
 - **Language**: TypeScript
 - **Styling**: Tailwind CSS
 - **AI API**: Google Gemini 2.5 Flash Image ([@google/genai](https://www.npmjs.com/package/@google/genai))
@@ -213,25 +213,37 @@ This repository is a runnable, self-contained issue factory:
 GitHub issue
   -> Codex triage
   -> factory state label + comment
-  -> Codex implementation when ready
-  -> deterministic validation, commit, branch, and pull request
+  -> Codex build/implementation when ready
+  -> read-only Codex issue-satisfaction evaluation
+  -> isolated lint, unit-test, and production-build testing
+  -> Codex translates acceptance criteria into a bounded scenario
+  -> Playwright tests that scenario against the running built application
+  -> commit, branch, and pull request
+  -> isolated pull-request testing
   -> human review
 ```
 
-GitHub stores the factory state on each issue with one of three labels:
+GitHub stores the factory state on each issue with one of five labels:
 
 - `factory:ready`
 - `factory:needs-info`
 - `factory:wait`
+- `factory:pr-open`
+- `factory:done`
 
-The workflow is [`.github/workflows/codex-factory.yml`](.github/workflows/codex-factory.yml). It uses the official [`openai/codex-action`](https://github.com/openai/codex-action), pinned to an immutable commit. Generation, validation, and publishing run in separate jobs: Codex receives the OpenAI key but no write credential, generated code is validated on a fresh runner without factory secrets or persisted Git credentials, and a final deterministic job applies the already-validated patch without executing it. The workflow never merges.
+The workflow is [`.github/workflows/codex-factory.yml`](.github/workflows/codex-factory.yml). It uses the official [`openai/codex-action`](https://github.com/openai/codex-action), pinned to an immutable commit. Build, evaluation, deterministic testing, scenario preparation, browser testing, and publishing run in separate jobs. Codex receives the OpenAI key but no write credential; generated code runs only on fresh, isolated runners without factory secrets or persisted Git credentials. The evaluator returns `pass` or `needs-human`; a `needs-human` result or `not-applicable` browser scenario opens a draft PR. Evaluation is advisory and never substitutes for required human approval. The workflow never merges.
+
+“Put in scenario” is not a stage name used by the original demo. Its closest equivalent is the [computer-use behavior verification stage](https://www.warp.dev/blog/how-to-build-a-cloud-software-factory-computer-use-verification): exercise acceptance criteria against the running product and retain evidence. Here, Codex derives a small acceptance scenario from the issue and candidate diff using a strict safe-operation schema. A trusted Playwright runner then starts the production build on an internal Docker network, exercises the scenario without external credentials or internet access, and uploads a screenshot plus machine-readable result. Backend-only or externally dependent behavior is recorded explicitly as `not-applicable` instead of being reported as verified.
 
 ### Enable the factory
 
 1. Enable GitHub Issues and GitHub Actions for the repository.
 2. Add an OpenAI API key as the repository Actions secret `OPENAI_API_KEY`.
-3. Allow GitHub Actions to create pull requests, and protect the default branch so pull requests require human approval.
-4. Open an issue as the repository owner or a collaborator. The factory starts automatically.
+3. Allow GitHub Actions to create pull requests.
+4. Protect `main`: require the `validate` status check, require one approving
+   review, dismiss stale approvals, require approval of the most recent push
+   by someone other than its pusher, and require branches to be up to date.
+5. Open an issue as a repository user with write access. The factory starts automatically.
 
 To start the factory on an existing issue:
 
@@ -242,16 +254,10 @@ npm run factory -- 123
 If a later PR check sits on **workflow awaiting approval**, GitHub is blocking a bot-opened PR. Approve that specific Actions run while logged in as a repo admin:
 
 ```bash
-gh api -X POST repos/dhosno/nano-banana-editor/actions/runs/<run-id>/approve
+gh api -X POST "repos/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/actions/runs/<run-id>/approve"
 ```
 
 The run id is on the Actions page for **Codex PR Validation**. A PR review thumbs-up does not start it.
-
-Process an existing issue manually:
-
-```bash
-npm run factory -- 123
-```
 
 Or dispatch it directly:
 
@@ -259,7 +265,9 @@ Or dispatch it directly:
 gh workflow run codex-factory.yml --ref main -f issue_number=123
 ```
 
-The factory ignores public issue authors who do not have a trusted repository association and does not feed issue comments into Codex. Candidate patches cannot change workflows, prompts, factory controllers, or dependency manifests. API usage is serialized to one active factory run, every job has a timeout, and the factory stops at a pull request for human review.
+When triage applies `factory:needs-info`, editing the issue or adding a comment as a user with write access reruns triage with a bounded snapshot of the issue and its latest comments. Other public issue authors do not start the factory automatically.
+
+Candidate patches cannot change workflows, prompts, Codex instructions, factory controllers, dependency manifests, or validation configuration. Factory runs must use the protected default-branch workflow revision. Runs are serialized per issue, duplicate open factory PRs are rejected, every job has a timeout, and the factory stops at a pull request for human review. Browser evidence is attached to the PR as an Actions artifact. [`.github/workflows/pr-validation.yml`](.github/workflows/pr-validation.yml) validates every PR in an isolated container. For bot-authored factory PRs, it additionally verifies an immutable Actions attestation that binds the trusted source revision, run, issue, and head SHA; installs dependencies from the trusted base before applying the diff; disables candidate network access; and moves the linked issue to `factory:done` or back to `factory:wait` when the PR closes.
 
 ## 🤝 Contributing
 

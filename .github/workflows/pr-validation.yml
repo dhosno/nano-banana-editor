@@ -3,20 +3,23 @@ name: Codex PR Validation
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
 
 jobs:
   validate:
     name: validate
-    if: startsWith(github.head_ref, 'codex/')
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      actions: read
       contents: read
     steps:
-      - name: Checkout pull request merge result
+      - name: Checkout trusted base
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Set up Node.js
@@ -24,13 +27,129 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install dependencies
-        run: npm ci
-
       - name: Pull pinned isolated validation image
         run: docker pull node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
 
-      - name: Validate merge result without network
+      - name: Preserve trusted boundary checker
+        run: cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+
+      - name: Classify factory candidate
+        id: provenance
+        env:
+          REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+          echo "factory=false" >> "$GITHUB_OUTPUT"
+          if [[ "$HEAD_REF" != codex/issue-* ]]; then
+            if [ "$PR_AUTHOR" = "github-actions[bot]" ]; then
+              echo "::error::Bot-authored pull requests require factory attestation"
+              exit 1
+            fi
+            exit 0
+          fi
+          if [ "$HEAD_REPO" != "$REPO" ] || [ "$PR_AUTHOR" != "github-actions[bot]" ]; then
+            echo "::error::A codex/ branch is not an attested factory pull request"
+            exit 1
+          fi
+          if ! [[ "$HEAD_REF" =~ ^codex/issue-([1-9][0-9]*)-([1-9][0-9]*)-([1-9][0-9]*)$ ]]; then
+            echo "::error::Factory branch name is malformed"
+            exit 1
+          fi
+
+          issue_number="${BASH_REMATCH[1]}"
+          run_id="${BASH_REMATCH[2]}"
+          run_attempt="${BASH_REMATCH[3]}"
+          {
+            echo "factory=true"
+            echo "issue_number=$issue_number"
+            echo "run_id=$run_id"
+            echo "run_attempt=$run_attempt"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download immutable factory attestation
+        if: steps.provenance.outputs.factory == 'true'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-attestation-${{ steps.provenance.outputs.run_id }}-${{ steps.provenance.outputs.run_attempt }}
+          path: .factory/attestation
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.provenance.outputs.run_id }}
+
+      - name: Verify immutable factory attestation
+        if: steps.provenance.outputs.factory == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ steps.provenance.outputs.issue_number }}
+          RUN_ID: ${{ steps.provenance.outputs.run_id }}
+          RUN_ATTEMPT: ${{ steps.provenance.outputs.run_attempt }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          # shellcheck disable=SC2016
+          set -euo pipefail
+          run_json="$(
+            gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT"
+          )"
+          jq -e \
+            --arg attempt "$RUN_ATTEMPT" \
+            --arg branch "$DEFAULT_BRANCH" '
+              .path == ".github/workflows/codex-factory.yml" and
+              (.run_attempt | tostring) == $attempt and
+              .head_branch == $branch
+            ' <<<"$run_json" > /dev/null
+          workflow_sha="$(jq -r '.head_sha' <<<"$run_json")"
+          jq -e \
+            --argjson issue "$ISSUE_NUMBER" \
+            --arg run "$RUN_ID" \
+            --arg attempt "$RUN_ATTEMPT" \
+            --arg head "$HEAD_SHA" \
+            --arg workflow "$workflow_sha" \
+            '
+              .issue == $issue and
+              .run == $run and
+              .attempt == $attempt and
+              .head == $head and
+              .workflow == $workflow
+            ' .factory/attestation/attestation.json > /dev/null
+
+      - name: Install trusted baseline dependencies for factory candidate
+        if: steps.provenance.outputs.factory == 'true'
+        run: npm ci
+
+      - name: Fetch and apply immutable pull request merge result
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p .factory
+          if ! [[ "$MERGE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Pull request has no immutable merge result"
+            exit 1
+          fi
+          git fetch --no-tags --depth=1 origin "$MERGE_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$MERGE_SHA"
+          git diff "$BASE_SHA" "$MERGE_SHA" \
+            --binary \
+            --full-index \
+            --no-ext-diff \
+            --no-renames \
+            > .factory/change.patch
+          git apply --index --binary .factory/change.patch
+
+      - name: Enforce factory candidate boundaries
+        if: steps.provenance.outputs.factory == 'true'
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/check-boundaries.mjs"
+
+      - name: Validate factory candidate without network
+        if: steps.provenance.outputs.factory == 'true'
         run: |
           set -euo pipefail
           docker run --rm \
@@ -49,3 +168,156 @@ jobs:
             --workdir /repo \
             node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584 \
             bash -lc 'npm run lint && npm test && npm run build'
+
+      - name: Validate non-factory candidate in an isolated container
+        if: steps.provenance.outputs.factory != 'true'
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 512 \
+            --cpus 2 \
+            --memory 4g \
+            --read-only \
+            --tmpfs /tmp:rw,nosuid,size=512m \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
+            --env NEXT_TELEMETRY_DISABLED=1 \
+            --volume "$GITHUB_WORKSPACE:/repo" \
+            --workdir /repo \
+            node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584 \
+            bash -lc 'npm ci && npm run lint && npm test && npm run build'
+
+  update_issue_state:
+    name: Update issue after pull request closes
+    if: >-
+      github.event.action == 'closed' &&
+      startsWith(github.head_ref, 'codex/issue-') &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      issues: write
+      pull-requests: read
+    steps:
+      - name: Read factory identity
+        id: provenance
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$HEAD_REF" =~ ^codex/issue-([1-9][0-9]*)-([1-9][0-9]*)-([1-9][0-9]*)$ ]]; then
+            echo "::error::Cannot recover factory identity from branch"
+            exit 1
+          fi
+          {
+            echo "issue_number=${BASH_REMATCH[1]}"
+            echo "run_id=${BASH_REMATCH[2]}"
+            echo "run_attempt=${BASH_REMATCH[3]}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download immutable factory attestation
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-attestation-${{ steps.provenance.outputs.run_id }}-${{ steps.provenance.outputs.run_attempt }}
+          path: .factory/attestation
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.provenance.outputs.run_id }}
+
+      - name: Apply final factory state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ steps.provenance.outputs.issue_number }}
+          RUN_ID: ${{ steps.provenance.outputs.run_id }}
+          RUN_ATTEMPT: ${{ steps.provenance.outputs.run_attempt }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGED: ${{ github.event.pull_request.merged }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          # shellcheck disable=SC2016
+          set -euo pipefail
+          run_json="$(
+            gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT"
+          )"
+          jq -e \
+            --arg attempt "$RUN_ATTEMPT" \
+            --arg branch "$DEFAULT_BRANCH" '
+              .path == ".github/workflows/codex-factory.yml" and
+              (.run_attempt | tostring) == $attempt and
+              .head_branch == $branch
+            ' <<<"$run_json" > /dev/null
+          workflow_sha="$(jq -r '.head_sha' <<<"$run_json")"
+          jq -e \
+            --argjson issue "$ISSUE_NUMBER" \
+            --arg run "$RUN_ID" \
+            --arg attempt "$RUN_ATTEMPT" \
+            --arg head "$HEAD_SHA" \
+            --arg workflow "$workflow_sha" \
+            '
+              .issue == $issue and
+              .run == $run and
+              .attempt == $attempt and
+              .head == $head and
+              .workflow == $workflow
+            ' .factory/attestation/attestation.json > /dev/null
+          issue_number="$ISSUE_NUMBER"
+
+          gh label create "factory:pr-open" --repo "$REPO" --color "1D76DB" \
+            --description "Factory pull request is open" --force
+          gh label create "factory:wait" --repo "$REPO" --color "FBCA04" \
+            --description "Parked for human review" --force
+          gh label create "factory:done" --repo "$REPO" --color "5319E7" \
+            --description "Factory pull request was merged" --force
+
+          labels_json="$(gh issue view "$issue_number" --repo "$REPO" --json labels)"
+          if jq -e 'any(.labels[]; .name == "factory:done")' \
+            <<<"$labels_json" > /dev/null; then
+            echo "::notice::factory:done is terminal; leaving issue unchanged"
+            exit 0
+          fi
+
+          prefix="codex/issue-${issue_number}-"
+          other_pr="$(
+            gh pr list \
+              --repo "$REPO" \
+              --state open \
+              --limit 1000 \
+              --json author,headRefName,headRepository,isCrossRepository,url |
+              jq -r --arg prefix "$prefix" --arg repo "$REPO" '
+                [
+                  .[] |
+                  select(
+                    (.isCrossRepository | not) and
+                    .author.login == "app/github-actions" and
+                    .headRepository.nameWithOwner == $repo and
+                    (.headRefName | test("^" + $prefix + "[0-9]+-[0-9]+$"))
+                  )
+                ][0].url // empty
+              '
+          )"
+
+          for old_label in "factory:pr-open" "factory:wait" "factory:done"; do
+            if jq -e --arg label "$old_label" \
+              'any(.labels[]; .name == $label)' <<<"$labels_json" > /dev/null; then
+              gh issue edit "$issue_number" --repo "$REPO" \
+                --remove-label "$old_label"
+            fi
+          done
+
+          if [ "$MERGED" = "true" ]; then
+            gh issue edit "$issue_number" --repo "$REPO" --add-label "factory:done"
+            message="Factory pull request merged: $PR_URL"
+          elif [ -n "$other_pr" ]; then
+            gh issue edit "$issue_number" --repo "$REPO" --add-label "factory:pr-open"
+            message="A factory pull request closed, but another remains open: $other_pr"
+          else
+            gh issue edit "$issue_number" --repo "$REPO" --add-label "factory:wait"
+            message="Factory pull request closed without merging; human follow-up is required: $PR_URL"
+          fi
+          gh issue comment "$issue_number" --repo "$REPO" --body "$message"

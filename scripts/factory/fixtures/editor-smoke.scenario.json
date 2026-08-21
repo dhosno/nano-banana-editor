@@ -1,0 +1,31 @@
+{
+  "mode": "browser",
+  "summary": "Upload an image and verify that the editor accepts instructions.",
+  "steps": [
+    {
+      "operation": "assert-text",
+      "target": null,
+      "value": "Upload an image to get started"
+    },
+    {
+      "operation": "upload-image",
+      "target": "input[type=\"file\"]",
+      "value": null
+    },
+    {
+      "operation": "assert-text",
+      "target": null,
+      "value": "Edit your image"
+    },
+    {
+      "operation": "fill",
+      "target": "#instructions",
+      "value": "Increase the contrast"
+    },
+    {
+      "operation": "assert-enabled",
+      "target": "button[type=\"submit\"]",
+      "value": null
+    }
+  ]
+}

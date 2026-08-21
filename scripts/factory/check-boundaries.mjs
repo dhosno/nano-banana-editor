@@ -23,15 +23,57 @@ const PROTECTED_FILES = new Set([
   ".pnpmfile.cjs",
   ".node-version",
   ".nvmrc",
+  "AGENTS.md",
+  "AGENTS.override.md",
+  "eslint.config.js",
+  "eslint.config.mjs",
+  "eslint.config.cjs",
+  "eslint.config.ts",
+  "tsconfig.json",
+  "jsconfig.json",
+  "next.config.js",
+  "next.config.mjs",
+  "next.config.ts",
+  "postcss.config.js",
+  "postcss.config.mjs",
+  "postcss.config.cjs",
+  "postcss.config.ts",
+  "tailwind.config.js",
+  "tailwind.config.mjs",
+  "tailwind.config.cjs",
+  "tailwind.config.ts",
   "scripts/run-factory.mjs",
 ]);
 
 const PROTECTED_PREFIXES = [
   ".git",
   ".github/",
+  ".codex/",
   ".factory/",
   "scripts/factory/",
 ];
+
+function normalizeChangedPath(candidatePath) {
+  if (
+    typeof candidatePath !== "string" ||
+    candidatePath.length === 0 ||
+    candidatePath.includes("\0")
+  ) {
+    throw new Error("Candidate contains an invalid changed path");
+  }
+
+  const normalized = candidatePath.replaceAll("\\", "/");
+  const segments = normalized.split("/");
+  if (
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:\//.test(normalized) ||
+    segments.some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    throw new Error(`Candidate contains a non-repository path: ${candidatePath}`);
+  }
+
+  return normalized;
+}
 
 export function validateChangedPaths(paths) {
   if (paths.length === 0) {
@@ -43,7 +85,7 @@ export function validateChangedPaths(paths) {
   }
 
   const blocked = paths
-    .map((path) => path.replaceAll("\\", "/"))
+    .map(normalizeChangedPath)
     .filter(
       (path) =>
         PROTECTED_FILES.has(path) ||
@@ -58,7 +100,7 @@ export function validateChangedPaths(paths) {
   return paths;
 }
 
-function validateCandidateSizes(paths) {
+export function validateCandidateSizes(paths) {
   let totalBytes = 0;
 
   for (const path of paths) {

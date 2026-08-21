@@ -2,10 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
 import { GeminiSafetyBlockError, mapGeminiError } from '@/lib/gemini-errors';
 
-const genAI = new GoogleGenAI({
-  apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || ''
-});
-
 // The Gemini image call is awaited synchronously, so the request stays open for
 // the whole generation. Run on the Node.js runtime (the Edge runtime cannot be
 // used with the @google/genai SDK's Node dependencies) and raise the function
@@ -33,9 +29,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No instructions provided' }, { status: 400 });
     }
 
-    if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+    const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    if (!apiKey) {
       return NextResponse.json({ error: 'Google API key not configured' }, { status: 500 });
     }
+    const genAI = new GoogleGenAI({ apiKey });
 
     // Get image bytes and convert to base64
     const imageBytes = await file.arrayBuffer();
