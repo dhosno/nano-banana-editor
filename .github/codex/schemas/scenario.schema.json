@@ -36,6 +36,7 @@
             ],
             "properties": {
               "operation": {
+                "type": "string",
                 "const": "goto"
               },
               "target": {
@@ -59,6 +60,7 @@
             ],
             "properties": {
               "operation": {
+                "type": "string",
                 "const": "assert-text"
               },
               "target": {
@@ -112,6 +114,7 @@
             ],
             "properties": {
               "operation": {
+                "type": "string",
                 "const": "fill"
               },
               "target": {
