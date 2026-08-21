@@ -280,6 +280,9 @@ export default function Home() {
                     />
                   </label>
                 </div>
+                <p className="text-center text-xs text-slate-500">
+                  Images stay in your browser until you choose Process with AI.
+                </p>
 
                 {statusMessage && (
                   <div className={`max-w-2xl mx-auto ${messageClasses}`} role="status">
