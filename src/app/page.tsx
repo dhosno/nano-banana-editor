@@ -111,7 +111,7 @@ export default function Home() {
       
       // Set the selected history image as current
       setSelectedImage(historyItem.image);
-      const newFile = await dataURLtoFile(historyItem.image, `reverted_${Date.now()}.png`);
+      const newFile = await dataURLtoFile(historyItem.image, `reverted_${index + 1}.png`);
       setSelectedFile(newFile);
       
       // Clear any messages and set instructions hint

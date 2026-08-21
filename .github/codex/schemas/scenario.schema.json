@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "mode",
+    "summary",
+    "steps"
+  ],
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": [
+        "browser",
+        "not-applicable"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "pattern": "^[^\\u0000\\r\\n]+$"
+    },
+    "steps": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "operation",
+              "target",
+              "value"
+            ],
+            "properties": {
+              "operation": {
+                "const": "goto"
+              },
+              "target": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "pattern": "^/[^\\\\\\u0000\\r\\n]*$"
+              },
+              "value": {
+                "type": "null"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "operation",
+              "target",
+              "value"
+            ],
+            "properties": {
+              "operation": {
+                "const": "assert-text"
+              },
+              "target": {
+                "type": "null"
+              },
+              "value": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000,
+                "pattern": "^[^\\u0000\\r\\n]+$"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "operation",
+              "target",
+              "value"
+            ],
+            "properties": {
+              "operation": {
+                "type": "string",
+                "enum": [
+                  "assert-visible",
+                  "upload-image",
+                  "click",
+                  "assert-enabled",
+                  "assert-disabled"
+                ]
+              },
+              "target": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "pattern": "^[^\\u0000\\r\\n]+$"
+              },
+              "value": {
+                "type": "null"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "operation",
+              "target",
+              "value"
+            ],
+            "properties": {
+              "operation": {
+                "const": "fill"
+              },
+              "target": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "pattern": "^[^\\u0000\\r\\n]+$"
+              },
+              "value": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000,
+                "pattern": "^[^\\u0000\\r\\n]+$"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
