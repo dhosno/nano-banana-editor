@@ -351,6 +351,10 @@ export default function Home() {
         </div>
       </div>
 
+      <footer className="text-center text-sm text-slate-500">
+        Built as a Codex issue factory demo.
+      </footer>
+
       {/* Image History Strip */}
       {imageHistory.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-lg p-4">
