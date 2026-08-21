@@ -157,7 +157,7 @@ test("a publish-job rerun reuses an existing pull request from that run", () => 
 test("PR validation installs the trusted base before applying candidate code", () => {
   const workflow = read(".github/workflows/pr-validation.yml");
   const install = workflow.indexOf(
-    "Install trusted baseline dependencies for factory candidate",
+    "Install trusted baseline dependencies for bounded candidate",
   );
   const apply = workflow.indexOf(
     "Fetch and apply immutable pull request merge result",
@@ -189,6 +189,12 @@ test("required PR validation cannot skip non-factory pull requests", () => {
   assert.match(workflow, /\.workflow == \$workflow/);
   assert.match(workflow, /actions\/runs\/\$RUN_ID\/attempts\/\$RUN_ATTEMPT/);
   assert.match(workflow, /PR_AUTHOR.*github\.event\.pull_request\.user\.login/);
+  assert.match(
+    workflow,
+    /AUTHOR_ASSOCIATION.*github\.event\.pull_request\.author_association/,
+  );
+  assert.match(workflow, /OWNER\|MEMBER\|COLLABORATOR/);
+  assert.match(workflow, /steps\.provenance\.outputs\.trusted != 'true'/);
   assert.match(workflow, /Bot-authored pull requests require factory attestation/);
   assert.match(workflow, /Install non-factory dependencies without scripts/);
   assert.match(workflow, /npm ci\s+\\\s+--ignore-scripts/);

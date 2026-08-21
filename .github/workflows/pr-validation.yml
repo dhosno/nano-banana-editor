@@ -46,13 +46,19 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
         run: |
           set -euo pipefail
           echo "factory=false" >> "$GITHUB_OUTPUT"
+          echo "trusted=false" >> "$GITHUB_OUTPUT"
           if [[ "$HEAD_REF" != codex/issue-* ]]; then
             if [ "$PR_AUTHOR" = "github-actions[bot]" ]; then
               echo "::error::Bot-authored pull requests require factory attestation"
               exit 1
+            fi
+            if [ "$HEAD_REPO" = "$REPO" ] && \
+              [[ "$AUTHOR_ASSOCIATION" =~ ^(OWNER|MEMBER|COLLABORATOR)$ ]]; then
+              echo "trusted=true" >> "$GITHUB_OUTPUT"
             fi
             exit 0
           fi
@@ -123,8 +129,10 @@ jobs:
               .workflow == $workflow
             ' .factory/attestation/attestation.json > /dev/null
 
-      - name: Install trusted baseline dependencies for factory candidate
-        if: steps.provenance.outputs.factory == 'true'
+      - name: Install trusted baseline dependencies for bounded candidate
+        if: >-
+          steps.provenance.outputs.factory == 'true' ||
+          steps.provenance.outputs.trusted != 'true'
         run: npm ci
 
       - name: Fetch and apply immutable pull request merge result
@@ -154,8 +162,10 @@ jobs:
             > .factory/change.patch
           git apply --index --binary .factory/change.patch
 
-      - name: Enforce factory candidate boundaries
-        if: steps.provenance.outputs.factory == 'true'
+      - name: Enforce bounded candidate paths
+        if: >-
+          steps.provenance.outputs.factory == 'true' ||
+          steps.provenance.outputs.trusted != 'true'
         run: |
           set -euo pipefail
           node "$RUNNER_TEMP/check-boundaries.mjs"
@@ -169,7 +179,9 @@ jobs:
           bash "$RUNNER_TEMP/run-isolated-validation.sh"
 
       - name: Install non-factory dependencies without scripts
-        if: steps.provenance.outputs.factory != 'true'
+        if: >-
+          steps.provenance.outputs.factory != 'true' &&
+          steps.provenance.outputs.trusted == 'true'
         run: |
           set -euo pipefail
           docker run --rm \
