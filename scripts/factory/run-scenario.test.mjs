@@ -82,18 +82,27 @@ test("rejects cross-origin navigation", () => {
 });
 
 test("rejects scenarios without observable assertions", () => {
-  assert.throws(
-    () =>
-      validateScenario({
-        mode: "browser",
-        summary: "No outcome",
-        steps: [
-          { operation: "goto", target: "/", value: null },
-          { operation: "click", target: "button", value: null },
-        ],
-      }),
-    /observable outcome/,
-  );
+  for (const step of [
+    { operation: "click", target: "button", value: null },
+    {
+      operation: "assert-attached",
+      target: 'input[type="file"]',
+      value: null,
+    },
+  ]) {
+    assert.throws(
+      () =>
+        validateScenario({
+          mode: "browser",
+          summary: "No user-visible outcome",
+          steps: [
+            { operation: "goto", target: "/", value: null },
+            step,
+          ],
+        }),
+      /observable outcome/,
+    );
+  }
 });
 
 test("rejects operation fields that do not match the safe DSL", () => {

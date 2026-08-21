@@ -26,7 +26,6 @@ const TARGET_ONLY = new Set([
 const ASSERTIONS = new Set([
   "assert-text",
   "assert-visible",
-  "assert-attached",
   "assert-enabled",
   "assert-disabled",
 ]);

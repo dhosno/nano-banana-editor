@@ -387,8 +387,11 @@ jobs:
       - name: Pull pinned isolated validation image
         run: docker pull node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
 
-      - name: Preserve trusted boundary checker
-        run: cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+      - name: Preserve trusted validation controls
+        run: |
+          cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+          cp scripts/factory/run-isolated-validation.sh \
+            "$RUNNER_TEMP/run-isolated-validation.sh"
 
       - name: Download immutable candidate patch
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
@@ -404,24 +407,11 @@ jobs:
           node "$RUNNER_TEMP/check-boundaries.mjs"
 
       - name: Run isolated validation without network or host credentials
+        env:
+          VALIDATION_IMAGE: node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
         run: |
           set -euo pipefail
-          docker run --rm \
-            --network none \
-            --cap-drop ALL \
-            --security-opt no-new-privileges \
-            --pids-limit 512 \
-            --cpus 2 \
-            --memory 4g \
-            --read-only \
-            --tmpfs /tmp:rw,nosuid,size=512m \
-            --user "$(id -u):$(id -g)" \
-            --env HOME=/tmp \
-            --env NEXT_TELEMETRY_DISABLED=1 \
-            --volume "$GITHUB_WORKSPACE:/repo" \
-            --workdir /repo \
-            node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584 \
-            bash -lc 'npm run lint && npm test && npm run build'
+          bash "$RUNNER_TEMP/run-isolated-validation.sh"
 
   evaluate:
     name: Evaluate candidate with Codex

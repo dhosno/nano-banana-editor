@@ -33,8 +33,11 @@ jobs:
       - name: Pull pinned isolated validation image
         run: docker pull node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
 
-      - name: Preserve trusted boundary checker
-        run: cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+      - name: Preserve trusted validation controls
+        run: |
+          cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+          cp scripts/factory/run-isolated-validation.sh \
+            "$RUNNER_TEMP/run-isolated-validation.sh"
 
       - name: Classify factory candidate
         id: provenance
@@ -159,26 +162,13 @@ jobs:
 
       - name: Validate factory candidate without network
         if: steps.provenance.outputs.factory == 'true'
+        env:
+          VALIDATION_IMAGE: node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
         run: |
           set -euo pipefail
-          docker run --rm \
-            --network none \
-            --cap-drop ALL \
-            --security-opt no-new-privileges \
-            --pids-limit 512 \
-            --cpus 2 \
-            --memory 4g \
-            --read-only \
-            --tmpfs /tmp:rw,nosuid,size=512m \
-            --user "$(id -u):$(id -g)" \
-            --env HOME=/tmp \
-            --env NEXT_TELEMETRY_DISABLED=1 \
-            --volume "$GITHUB_WORKSPACE:/repo" \
-            --workdir /repo \
-            node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584 \
-            bash -lc 'npm run lint && npm test && npm run build'
+          bash "$RUNNER_TEMP/run-isolated-validation.sh"
 
-      - name: Validate non-factory candidate in an isolated container
+      - name: Install non-factory dependencies without scripts
         if: steps.provenance.outputs.factory != 'true'
         run: |
           set -euo pipefail
@@ -189,14 +179,28 @@ jobs:
             --cpus 2 \
             --memory 4g \
             --read-only \
-            --tmpfs /tmp:rw,nosuid,size=512m \
+            --tmpfs /tmp:rw,nosuid,nodev,size=1g \
             --user "$(id -u):$(id -g)" \
             --env HOME=/tmp \
-            --env NEXT_TELEMETRY_DISABLED=1 \
+            --env npm_config_cache=/tmp/npm-cache \
+            --env npm_config_ignore_scripts=true \
             --volume "$GITHUB_WORKSPACE:/repo" \
             --workdir /repo \
             node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584 \
-            bash -lc 'npm ci && npm run lint && npm test && npm run build'
+            npm ci \
+              --ignore-scripts \
+              --no-audit \
+              --no-fund \
+              --registry=https://registry.npmjs.org \
+              --replace-registry-host=always
+
+      - name: Validate non-factory candidate in an isolated container
+        if: steps.provenance.outputs.factory != 'true'
+        env:
+          VALIDATION_IMAGE: node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
+        run: |
+          set -euo pipefail
+          bash "$RUNNER_TEMP/run-isolated-validation.sh"
 
   update_issue_state:
     name: Update issue after pull request closes

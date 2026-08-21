@@ -190,6 +190,12 @@ test("required PR validation cannot skip non-factory pull requests", () => {
   assert.match(workflow, /actions\/runs\/\$RUN_ID\/attempts\/\$RUN_ATTEMPT/);
   assert.match(workflow, /PR_AUTHOR.*github\.event\.pull_request\.user\.login/);
   assert.match(workflow, /Bot-authored pull requests require factory attestation/);
+  assert.match(workflow, /Install non-factory dependencies without scripts/);
+  assert.match(workflow, /npm ci\s+\\\s+--ignore-scripts/);
+  for (const candidateWorkflow of [factory, workflow]) {
+    assert.match(candidateWorkflow, /run-isolated-validation\.sh/);
+    assert.match(candidateWorkflow, /VALIDATION_IMAGE: node@sha256:/);
+  }
   assert.doesNotMatch(factory, /codex-factory-attestation run=/);
 });
 
