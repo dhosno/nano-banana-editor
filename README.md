@@ -231,7 +231,21 @@ The workflow is [`.github/workflows/codex-factory.yml`](.github/workflows/codex-
 1. Enable GitHub Issues and GitHub Actions for the repository.
 2. Add an OpenAI API key as the repository Actions secret `OPENAI_API_KEY`.
 3. Allow GitHub Actions to create pull requests, and protect the default branch so pull requests require human approval.
-4. Open an issue as the repository owner or a collaborator. The workflow starts automatically.
+4. Open an issue as the repository owner or a collaborator. The factory starts automatically.
+
+To start the factory on an existing issue:
+
+```bash
+npm run factory -- 123
+```
+
+If a later PR check sits on **workflow awaiting approval**, GitHub is blocking a bot-opened PR. Approve that specific Actions run while logged in as a repo admin:
+
+```bash
+gh api -X POST repos/dhosno/nano-banana-editor/actions/runs/<run-id>/approve
+```
+
+The run id is on the Actions page for **Codex PR Validation**. A PR review thumbs-up does not start it.
 
 Process an existing issue manually:
 
