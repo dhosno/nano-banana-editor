@@ -1,0 +1,342 @@
+name: Codex Issue Factory
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Existing GitHub issue number to process
+        required: true
+        type: string
+
+concurrency:
+  group: codex-factory-issue-${{ github.event.issue.number || inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    name: Triage issue
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.issue.author_association == 'OWNER' ||
+      github.event.issue.author_association == 'MEMBER' ||
+      github.event.issue.author_association == 'COLLABORATOR'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      state: ${{ steps.apply.outputs.state }}
+      issue_number: ${{ steps.issue.outputs.number }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Capture bounded issue context
+        id: issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::issue_number must be a positive integer"
+            exit 1
+          fi
+          mkdir -p .factory
+          gh issue view "$ISSUE_NUMBER" \
+            --repo "$REPO" \
+            --json number,title,body,url,state,author,labels \
+            > .factory/issue.json
+          jq -e '
+            .state == "OPEN" and
+            (.title | length <= 200) and
+            ((.body // "") | length <= 10000)
+          ' .factory/issue.json > /dev/null
+          echo "number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Triage with Codex
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/triage.md
+          output-file: .factory/triage-result.json
+          output-schema-file: .github/codex/schemas/triage.schema.json
+          permission-profile: ":read-only"
+          safety-strategy: drop-sudo
+          codex-version: "0.144.1"
+          codex-args: '["--ephemeral"]'
+
+      - name: Apply triage state
+        id: apply
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+        run: |
+          set -euo pipefail
+          jq -e . .factory/triage-result.json > /dev/null
+          state="$(jq -r '.state' .factory/triage-result.json)"
+
+          case "$state" in
+            ready-to-implement)
+              label="factory:ready"
+              ;;
+            needs-info)
+              label="factory:needs-info"
+              ;;
+            wait)
+              label="factory:wait"
+              ;;
+            *)
+              echo "::error::Unsupported triage state: $state"
+              exit 1
+              ;;
+          esac
+
+          gh label create "factory:ready" --repo "$REPO" --color "0E8A16" \
+            --description "Ready for Codex implementation" --force
+          gh label create "factory:needs-info" --repo "$REPO" --color "D93F0B" \
+            --description "Needs human clarification" --force
+          gh label create "factory:wait" --repo "$REPO" --color "FBCA04" \
+            --description "Parked for human review" --force
+
+          labels_json="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels)"
+          for old_label in "factory:ready" "factory:needs-info" "factory:wait"; do
+            if jq -e --arg label "$old_label" \
+              'any(.labels[]; .name == $label)' <<<"$labels_json" > /dev/null; then
+              gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
+                --remove-label "$old_label"
+            fi
+          done
+          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "$label"
+
+          jq -r '.comment' .factory/triage-result.json > .factory/triage-comment.md
+          printf '\n\n---\n_Triaged by Codex through the repository factory._\n' \
+            >> .factory/triage-comment.md
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+            --body-file .factory/triage-comment.md
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+
+  generate:
+    name: Generate implementation patch
+    needs: triage
+    if: needs.triage.outputs.state == 'ready-to-implement'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      base_sha: ${{ steps.patch.outputs.base_sha }}
+    steps:
+      - name: Checkout immutable base
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Preserve trusted boundary checker
+        run: cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+
+      - name: Capture bounded issue context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ needs.triage.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          mkdir -p .factory
+          gh issue view "$ISSUE_NUMBER" \
+            --repo "$REPO" \
+            --json number,title,body,url,state,author,labels \
+            > .factory/issue.json
+          jq -e '
+            .state == "OPEN" and
+            (.title | length <= 200) and
+            ((.body // "") | length <= 10000)
+          ' .factory/issue.json > /dev/null
+
+      - name: Implement with Codex
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/implement.md
+          output-file: .factory/implementation-summary.md
+          permission-profile: ":workspace"
+          safety-strategy: drop-sudo
+          codex-version: "0.144.1"
+          codex-args: '["--ephemeral"]'
+
+      - name: Create bounded patch
+        id: patch
+        run: |
+          set -euo pipefail
+          git add -N .
+          node "$RUNNER_TEMP/check-boundaries.mjs"
+          git diff HEAD --binary --full-index --no-ext-diff --no-renames \
+            > .factory/change.patch
+          if [ ! -s .factory/change.patch ]; then
+            echo "::error::Codex completed without producing a patch"
+            exit 1
+          fi
+          base_sha="$(git rev-parse HEAD)"
+          printf '%s\n' "$base_sha" > .factory/base-sha
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable candidate patch
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: codex-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .factory/change.patch
+            .factory/base-sha
+            .factory/implementation-summary.md
+          if-no-files-found: error
+          retention-days: 1
+
+  validate:
+    name: Validate candidate without write credentials
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout immutable base without persisted credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.generate.outputs.base_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+
+      - name: Install trusted baseline dependencies
+        run: npm ci
+
+      - name: Pull pinned isolated validation image
+        run: docker pull node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
+
+      - name: Preserve trusted boundary checker
+        run: cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+
+      - name: Download immutable candidate patch
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: codex-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .factory
+
+      - name: Apply and recheck candidate
+        run: |
+          set -euo pipefail
+          test "$(cat .factory/base-sha)" = "$(git rev-parse HEAD)"
+          git apply --index --binary .factory/change.patch
+          node "$RUNNER_TEMP/check-boundaries.mjs"
+
+      - name: Run isolated validation without network or host credentials
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --network none \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 512 \
+            --cpus 2 \
+            --memory 4g \
+            --read-only \
+            --tmpfs /tmp:rw,nosuid,size=512m \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
+            --env NEXT_TELEMETRY_DISABLED=1 \
+            --volume "$GITHUB_WORKSPACE:/repo" \
+            --workdir /repo \
+            node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584 \
+            bash -lc 'npm run lint && npm test && npm run build'
+
+  publish:
+    name: Publish validated pull request
+    needs: [triage, generate, validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout immutable validated base
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.generate.outputs.base_sha }}
+          fetch-depth: 0
+
+      - name: Preserve trusted boundary checker
+        run: cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+
+      - name: Download validated candidate patch
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: codex-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .factory
+
+      - name: Apply validated patch without executing it
+        run: |
+          set -euo pipefail
+          test "$(cat .factory/base-sha)" = "$(git rev-parse HEAD)"
+          git apply --index --binary .factory/change.patch
+          node "$RUNNER_TEMP/check-boundaries.mjs"
+
+      - name: Commit, push, and open pull request
+        id: pull_request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ needs.triage.outputs.issue_number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          branch="codex/issue-${ISSUE_NUMBER}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git switch -c "$branch"
+          git config user.name "codex-factory[bot]"
+          git config user.email "codex-factory[bot]@users.noreply.github.com"
+          git commit -m "feat: implement issue #${ISSUE_NUMBER}"
+          git push origin "$branch"
+
+          issue_title="$(
+            gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json title --jq '.title'
+          )"
+          {
+            printf 'Closes #%s\n\n' "$ISSUE_NUMBER"
+            cat <<'EOF'
+          ## Summary
+          Implemented by the repository Codex factory.
+
+          ## Validation
+          - `npm ci`
+          - `npm run lint`
+          - `npm test`
+          - `npm run build`
+
+          Human review is required; this workflow never merges pull requests.
+          EOF
+          } > .factory/pull-request.md
+
+          pr_url="$(
+            gh pr create \
+              --repo "$REPO" \
+              --base "$DEFAULT_BRANCH" \
+              --head "$branch" \
+              --title "Codex: $issue_title" \
+              --body-file .factory/pull-request.md
+          )"
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+            --body "Codex opened an implementation pull request: $pr_url"

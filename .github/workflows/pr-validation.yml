@@ -1,0 +1,51 @@
+name: Codex PR Validation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  validate:
+    name: validate
+    if: startsWith(github.head_ref, 'codex/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout pull request merge result
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Pull pinned isolated validation image
+        run: docker pull node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584
+
+      - name: Validate merge result without network
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --network none \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 512 \
+            --cpus 2 \
+            --memory 4g \
+            --read-only \
+            --tmpfs /tmp:rw,nosuid,size=512m \
+            --user "$(id -u):$(id -g)" \
+            --env HOME=/tmp \
+            --env NEXT_TELEMETRY_DISABLED=1 \
+            --volume "$GITHUB_WORKSPACE:/repo" \
+            --workdir /repo \
+            node@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584 \
+            bash -lc 'npm run lint && npm test && npm run build'

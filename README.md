@@ -205,6 +205,48 @@ Or just push to the default branch once the Git integration is connected.
 
 The app is a standard Next.js application and can be deployed to any platform that supports Node.js. The `maxDuration` export and the 4 MB client-side upload guard are Vercel-specific; other hosts may allow larger bodies or longer requests.
 
+## Codex Issue Factory
+
+This repository is a runnable, self-contained issue factory:
+
+```text
+GitHub issue
+  -> Codex triage
+  -> factory state label + comment
+  -> Codex implementation when ready
+  -> deterministic validation, commit, branch, and pull request
+  -> human review
+```
+
+GitHub stores the factory state on each issue with one of three labels:
+
+- `factory:ready`
+- `factory:needs-info`
+- `factory:wait`
+
+The workflow is [`.github/workflows/codex-factory.yml`](.github/workflows/codex-factory.yml). It uses the official [`openai/codex-action`](https://github.com/openai/codex-action), pinned to an immutable commit. Generation, validation, and publishing run in separate jobs: Codex receives the OpenAI key but no write credential, generated code is validated on a fresh runner without factory secrets or persisted Git credentials, and a final deterministic job applies the already-validated patch without executing it. The workflow never merges.
+
+### Enable the factory
+
+1. Enable GitHub Issues and GitHub Actions for the repository.
+2. Add an OpenAI API key as the repository Actions secret `OPENAI_API_KEY`.
+3. Allow GitHub Actions to create pull requests, and protect the default branch so pull requests require human approval.
+4. Open an issue as the repository owner or a collaborator. The workflow starts automatically.
+
+Process an existing issue manually:
+
+```bash
+npm run factory -- 123
+```
+
+Or dispatch it directly:
+
+```bash
+gh workflow run codex-factory.yml --ref main -f issue_number=123
+```
+
+The factory ignores public issue authors who do not have a trusted repository association and does not feed issue comments into Codex. Candidate patches cannot change workflows, prompts, factory controllers, or dependency manifests. API usage is serialized to one active factory run, every job has a timeout, and the factory stops at a pull request for human review.
+
 ## 🤝 Contributing
 
 1. Fork the repository
@@ -225,4 +267,4 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
-**Built with ❤️ by the Warp team**
+**Built for experimenting with iterative Gemini image editing.**

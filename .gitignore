@@ -40,6 +40,9 @@ yarn-error.log*
 # scratch output from local Playwright CLI browser sessions
 /.playwright-cli/
 
+# ephemeral Codex factory issue snapshots and outputs
+/.factory/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

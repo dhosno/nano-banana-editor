@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "state",
+    "comment"
+  ],
+  "properties": {
+    "state": {
+      "type": "string",
+      "enum": [
+        "ready-to-implement",
+        "needs-info",
+        "wait"
+      ]
+    },
+    "comment": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    }
+  }
+}

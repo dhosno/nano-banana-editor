@@ -10,7 +10,8 @@
     "build": "next build --turbopack",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --import tsx --test src/**/*.test.ts"
+    "test": "node --import tsx --test src/**/*.test.ts scripts/factory/*.test.mjs",
+    "factory": "node scripts/run-factory.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.17.0",
