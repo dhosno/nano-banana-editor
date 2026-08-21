@@ -87,6 +87,7 @@
                 "type": "string",
                 "enum": [
                   "assert-visible",
+                  "assert-attached",
                   "upload-image",
                   "click",
                   "assert-enabled",

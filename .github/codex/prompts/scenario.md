@@ -8,7 +8,7 @@ Use `mode: "browser"` when the requested behavior can be exercised in this web a
 
 - `goto`: set `target` to a repository path beginning with `/`; set `value` to `null`.
 - `assert-text`: set `target` to `null`; set `value` to visible text that must appear.
-- `assert-visible`, `assert-enabled`, `assert-disabled`, or `click`: set `target` to a CSS selector; set `value` to `null`.
+- `assert-visible`, `assert-attached`, `assert-enabled`, `assert-disabled`, or `click`: set `target` to a CSS selector; set `value` to `null`. Use `assert-visible` only for rendered UI. Use `assert-attached` for intentionally hidden controls such as a file input behind a styled upload label.
 - `fill`: set `target` to a CSS selector and `value` to text.
 - `upload-image`: set `target` to the image file input selector; set `value` to `null`.
 

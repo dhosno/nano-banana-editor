@@ -80,6 +80,7 @@ test("behavioral scenarios use a strict prompt, schema, runner, and evidence gat
   assert.match(workflow, /SCENARIO_MODE: \$\{\{ needs\.scenario\.outputs\.mode \}\}/);
   assert.match(workflow, /\[ "\$SCENARIO_MODE" = "not-applicable" \]/);
   assert.match(prompt, /separate trusted runner/);
+  assert.match(prompt, /Use `assert-attached` for intentionally hidden controls/);
   assert.deepEqual(schema.properties.mode.enum, ["browser", "not-applicable"]);
   assert.equal(schema.properties.steps.maxItems, 12);
   for (const branch of schema.properties.steps.items.anyOf) {
@@ -87,6 +88,11 @@ test("behavioral scenarios use a strict prompt, schema, runner, and evidence gat
       assert.ok(property.type, "strict output schema properties require a type");
     }
   }
+  assert.ok(
+    schema.properties.steps.items.anyOf.some((branch) =>
+      branch.properties.operation.enum?.includes("assert-attached"),
+    ),
+  );
   assert.match(runner, /SCENARIO_BASE_URL/);
 });
 
