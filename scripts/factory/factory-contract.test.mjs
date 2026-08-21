@@ -179,7 +179,7 @@ test("required PR validation cannot skip non-factory pull requests", () => {
   const factory = read(".github/workflows/codex-factory.yml");
   const workflow = read(".github/workflows/pr-validation.yml");
 
-  assert.match(workflow, /name: validate\s+if: github\.event\.action != 'closed'/);
+  assert.match(workflow, /name: validate\s+if: github\.event_name == 'pull_request'/);
   assert.match(workflow, /Validate non-factory candidate in an isolated container/);
   assert.match(factory, /name: codex-attestation-\$\{\{ github\.run_id \}\}/);
   assert.match(factory, /WORKFLOW_SHA: \$\{\{ github\.workflow_sha \}\}/);
@@ -196,8 +196,9 @@ test("required PR validation cannot skip non-factory pull requests", () => {
 test("closing a factory PR advances or releases its issue state", () => {
   const workflow = read(".github/workflows/pr-validation.yml");
 
-  assert.match(workflow, /types: \[[^\]]*closed[^\]]*\]/);
+  assert.match(workflow, /pull_request_target:\s+branches: \[main\]\s+types: \[closed\]/);
   assert.match(workflow, /^  update_issue_state:$/m);
+  assert.match(workflow, /github\.event_name == 'pull_request_target'/);
   assert.match(workflow, /--add-label "factory:done"/);
   assert.match(workflow, /--add-label "factory:wait"/);
 });
