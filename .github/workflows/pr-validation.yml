@@ -124,17 +124,23 @@ jobs:
       - name: Fetch and apply immutable pull request merge result
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           mkdir -p .factory
-          if ! [[ "$MERGE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Pull request has no immutable merge result"
+          if ! git fetch --no-tags --depth=2 origin \
+            "refs/pull/${PR_NUMBER}/merge"; then
+            echo "::error::Pull request has no generated merge result; it may conflict with the base"
             exit 1
           fi
-          git fetch --no-tags --depth=1 origin "$MERGE_SHA"
-          test "$(git rev-parse FETCH_HEAD)" = "$MERGE_SHA"
-          git diff "$BASE_SHA" "$MERGE_SHA" \
+          merge_sha="$(git rev-parse FETCH_HEAD)"
+          read -r merge_base merge_head < <(
+            git show --no-patch --format='%P' "$merge_sha"
+          )
+          test "$merge_base" = "$BASE_SHA"
+          test "$merge_head" = "$HEAD_SHA"
+          git diff "$BASE_SHA" "$merge_sha" \
             --binary \
             --full-index \
             --no-ext-diff \

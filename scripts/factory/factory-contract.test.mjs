@@ -150,9 +150,10 @@ test("PR validation installs the trusted base before applying candidate code", (
   assert.ok(install < apply);
   assert.ok(apply < boundary);
   assert.ok(boundary < validation);
-  assert.match(workflow, /github\.event\.pull_request\.merge_commit_sha/);
   assert.match(workflow, /github\.event\.pull_request\.head\.sha/);
-  assert.doesNotMatch(workflow, /refs\/pull\/\$\{PR_NUMBER\}\/merge/);
+  assert.match(workflow, /refs\/pull\/\$\{PR_NUMBER\}\/merge/);
+  assert.match(workflow, /test "\$merge_base" = "\$BASE_SHA"/);
+  assert.match(workflow, /test "\$merge_head" = "\$HEAD_SHA"/);
 });
 
 test("required PR validation cannot skip non-factory pull requests", () => {
