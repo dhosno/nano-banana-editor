@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "readiness",
+    "title",
+    "intent",
+    "in_scope",
+    "out_of_scope",
+    "acceptance_criteria",
+    "implementation_plan",
+    "affected_areas",
+    "test_plan",
+    "references",
+    "open_questions"
+  ],
+  "properties": {
+    "readiness": {
+      "type": "string",
+      "enum": [
+        "specified",
+        "needs-info"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\u0000\\r\\n]+$"
+    },
+    "intent": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "pattern": "^[^\\u0000\\r\\n]+$"
+    },
+    "in_scope": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "pattern": "^[^\\u0000\\r\\n]+$"
+      }
+    },
+    "out_of_scope": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "pattern": "^[^\\u0000\\r\\n]+$"
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "pattern": "^[^\\u0000\\r\\n]+$"
+      }
+    },
+    "implementation_plan": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "pattern": "^[^\\u0000\\r\\n]+$"
+      }
+    },
+    "affected_areas": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300,
+        "pattern": "^[^\\u0000\\r\\n]+$"
+      }
+    },
+    "test_plan": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "pattern": "^[^\\u0000\\r\\n]+$"
+      }
+    },
+    "references": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300,
+        "pattern": "^[^\\u0000\\r\\n]+$"
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "pattern": "^[^\\u0000\\r\\n]+$"
+      }
+    }
+  }
+}

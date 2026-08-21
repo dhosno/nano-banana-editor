@@ -17,8 +17,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  triage:
-    name: Triage issue
+  context:
+    name: Capture bounded issue context
     if: >-
       github.ref_name == github.event.repository.default_branch &&
       (
@@ -36,14 +36,21 @@ jobs:
             ) ||
             (
               github.event.action == 'edited' &&
-              contains(github.event.issue.labels.*.name, 'factory:needs-info')
+              (
+                contains(github.event.issue.labels.*.name, 'factory:needs-info') ||
+                contains(github.event.issue.labels.*.name, 'factory:approve')
+              )
             )
           )
         ) ||
         (
           github.event_name == 'issue_comment' &&
           github.event.issue.pull_request == null &&
-          contains(github.event.issue.labels.*.name, 'factory:needs-info') &&
+          github.event.comment.user.login != 'github-actions[bot]' &&
+          (
+            contains(github.event.issue.labels.*.name, 'factory:needs-info') ||
+            contains(github.event.issue.labels.*.name, 'factory:approve')
+          ) &&
           (
             github.event.comment.author_association == 'OWNER' ||
             github.event.comment.author_association == 'MEMBER' ||
@@ -52,15 +59,17 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     permissions:
       contents: read
-      issues: write
+      issues: read
       pull-requests: read
     outputs:
-      state: ${{ steps.apply.outputs.state }}
       issue_number: ${{ steps.issue.outputs.number }}
       issue_attempt: ${{ steps.artifact_identity.outputs.attempt }}
+      skip: ${{ steps.guard.outputs.skip }}
+      approve_requested: ${{ steps.state.outputs.approve_requested }}
+      approval: ${{ steps.state.outputs.approval }}
     steps:
       - name: Verify triggering actor has write access
         env:
@@ -80,11 +89,6 @@ jobs:
               exit 1
               ;;
           esac
-
-      - name: Checkout repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
 
       - name: Capture bounded issue context
         id: issue
@@ -118,10 +122,11 @@ jobs:
                   select(
                     .authorAssociation == "OWNER" or
                     .authorAssociation == "MEMBER" or
-                    .authorAssociation == "COLLABORATOR"
+                    .authorAssociation == "COLLABORATOR" or
+                    .author.login == "github-actions"
                   )
                 ) |
-                .[-5:]
+                .[-6:]
               )[]? |
               {
                 author: .author.login,
@@ -136,7 +141,7 @@ jobs:
             .state == "OPEN" and
             (.title | length <= 200) and
             ((.body // "") | length <= 10000) and
-            ([.comments[].body] | join("\n") | length <= 10000)
+            ([.comments[].body] | join("\n") | length <= 20000)
           ' .factory/issue.json > /dev/null
           echo "number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
 
@@ -182,8 +187,89 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Classify conversation and gate state
+        id: state
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          approve_requested=false
+          if jq -e 'any(.labels[]?; . == "factory:approve")' \
+            .factory/issue.json > /dev/null; then
+            approve_requested=true
+          fi
+
+          approval=false
+          if [ "$EVENT_NAME" = "issue_comment" ] && [ "$approve_requested" = "true" ]; then
+            first_line="$(printf '%s' "$COMMENT_BODY" | head -n 1 | tr -d '\r')"
+            case "$first_line" in
+              "/approve"|"/approve "*)
+                approval=true
+                ;;
+            esac
+          fi
+
+          echo "approve_requested=$approve_requested" >> "$GITHUB_OUTPUT"
+          echo "approval=$approval" >> "$GITHUB_OUTPUT"
+
+      - name: Record issue artifact identity
+        id: artifact_identity
+        run: echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable issue snapshot
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: codex-issue-${{ github.run_id }}-${{ steps.artifact_identity.outputs.attempt }}
+          path: .factory/issue.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+  triage:
+    name: Triage issue
+    needs: context
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.context.result == 'success' &&
+        needs.context.outputs.skip != 'true' &&
+        (
+          github.event_name == 'workflow_dispatch' ||
+          (github.event_name == 'issues' && github.event.action == 'opened') ||
+          contains(github.event.issue.labels.*.name, 'factory:needs-info')
+        )
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      state: ${{ steps.apply.outputs.state }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Download immutable issue snapshot
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-issue-${{ github.run_id }}-${{ needs.context.outputs.issue_attempt }}
+          path: .factory
+
+      - name: Verify issue snapshot
+        env:
+          ISSUE_NUMBER: ${{ needs.context.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016
+          jq -e --argjson number "$ISSUE_NUMBER" \
+            '.number == $number and .state == "OPEN"' \
+            .factory/issue.json > /dev/null
+
       - name: Triage with Codex
-        if: steps.guard.outputs.skip != 'true'
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -197,11 +283,10 @@ jobs:
 
       - name: Apply triage state
         id: apply
-        if: steps.guard.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          ISSUE_NUMBER: ${{ needs.context.outputs.issue_number }}
         run: |
           set -euo pipefail
           jq -e . .factory/triage-result.json > /dev/null
@@ -229,6 +314,8 @@ jobs:
             --description "Needs human clarification" --force
           gh label create "factory:wait" --repo "$REPO" --color "FBCA04" \
             --description "Parked for human review" --force
+          gh label create "factory:approve" --repo "$REPO" --color "5319E7" \
+            --description "Hold at spec for human review" --force
           gh label create "factory:pr-open" --repo "$REPO" --color "1D76DB" \
             --description "Factory pull request is open" --force
           gh label create "factory:done" --repo "$REPO" --color "5319E7" \
@@ -256,23 +343,172 @@ jobs:
             --body-file .factory/triage-comment.md
           echo "state=$state" >> "$GITHUB_OUTPUT"
 
-      - name: Record issue artifact identity
+  spec:
+    name: Specify feature with Codex
+    needs: [context, triage]
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.context.result == 'success' &&
+        needs.context.outputs.skip != 'true' &&
+        (
+          needs.triage.outputs.state == 'ready-to-implement' ||
+          needs.context.outputs.approve_requested == 'true'
+        )
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      proceed: ${{ steps.decision.outputs.proceed }}
+      spec_attempt: ${{ steps.artifact_identity.outputs.attempt }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Preserve trusted spec validator
+        run: cp scripts/factory/validate-spec.mjs "$RUNNER_TEMP/validate-spec.mjs"
+
+      - name: Download immutable issue snapshot
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-issue-${{ github.run_id }}-${{ needs.context.outputs.issue_attempt }}
+          path: .factory
+
+      - name: Verify issue snapshot
+        env:
+          ISSUE_NUMBER: ${{ needs.context.outputs.issue_number }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016
+          jq -e --argjson number "$ISSUE_NUMBER" \
+            '.number == $number and .state == "OPEN"' \
+            .factory/issue.json > /dev/null
+
+      - name: Specify with Codex
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/spec.md
+          output-file: .factory/spec.json
+          output-schema-file: .github/codex/schemas/spec.schema.json
+          permission-profile: ":read-only"
+          safety-strategy: drop-sudo
+          codex-version: "0.144.1"
+          codex-args: '["--ephemeral"]'
+
+      - name: Validate specification
+        run: node "$RUNNER_TEMP/validate-spec.mjs" --validate .factory/spec.json
+
+      - name: Resolve specification outcome
+        id: decision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ needs.context.outputs.issue_number }}
+          APPROVE_REQUESTED: ${{ needs.context.outputs.approve_requested }}
+          APPROVAL: ${{ needs.context.outputs.approval }}
+        run: |
+          set -euo pipefail
+          readiness="$(jq -r '.readiness' .factory/spec.json)"
+
+          gh label create "factory:ready" --repo "$REPO" --color "0E8A16" \
+            --description "Ready for Codex implementation" --force
+          gh label create "factory:needs-info" --repo "$REPO" --color "D93F0B" \
+            --description "Needs human clarification" --force
+          gh label create "factory:approve" --repo "$REPO" --color "5319E7" \
+            --description "Hold at spec for human review" --force
+
+          emit() {
+            if [ "$(jq -r --arg k "$1" '.[$k] | length' .factory/spec.json)" -gt 0 ]; then
+              printf '\n### %s\n' "$2"
+              jq -r --arg k "$1" '.[$k][] | "- \(.)"' .factory/spec.json
+            fi
+          }
+
+          if [ "$readiness" = "needs-info" ]; then
+            {
+              echo "## More information needed"
+              echo
+              jq -r '.intent' .factory/spec.json
+              printf '\n### Open questions\n'
+              jq -r '.open_questions[] | "- \(.)"' .factory/spec.json
+              printf '\n\n---\n_Specified by Codex through the repository factory._\n'
+            } > .factory/spec-comment.md
+
+            labels_json="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels)"
+            for old_label in "factory:ready" "factory:approve"; do
+              if jq -e --arg label "$old_label" \
+                'any(.labels[]; .name == $label)' <<<"$labels_json" > /dev/null; then
+                gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label "$old_label"
+              fi
+            done
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "factory:needs-info"
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+              --body-file .factory/spec-comment.md
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "## Proposed specification"
+            echo
+            printf '**Intent:** %s\n' "$(jq -r '.intent' .factory/spec.json)"
+            emit in_scope "In scope"
+            emit out_of_scope "Out of scope"
+            emit acceptance_criteria "Acceptance criteria"
+            emit implementation_plan "Implementation plan"
+            emit affected_areas "Affected areas"
+            emit test_plan "Test plan"
+            emit references "References"
+          } > .factory/spec-comment.md
+
+          if [ "$APPROVE_REQUESTED" = "true" ] && [ "$APPROVAL" != "true" ]; then
+            printf '\nReply with changes to refine this spec, or comment `/approve` to build it.' \
+              >> .factory/spec-comment.md
+            printf '\n\n---\n_Specified by Codex through the repository factory._\n' \
+              >> .factory/spec-comment.md
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+              --body-file .factory/spec-comment.md
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          printf '\n\n---\n_Specified by Codex through the repository factory._\n' \
+            >> .factory/spec-comment.md
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+            --body-file .factory/spec-comment.md
+
+          if [ "$APPROVAL" = "true" ]; then
+            labels_json="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels)"
+            if jq -e 'any(.labels[]; .name == "factory:approve")' \
+              <<<"$labels_json" > /dev/null; then
+              gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label "factory:approve"
+            fi
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Record specification artifact identity
         id: artifact_identity
         run: echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
 
-      - name: Upload immutable issue snapshot
+      - name: Upload immutable specification
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: codex-issue-${{ github.run_id }}-${{ steps.artifact_identity.outputs.attempt }}
-          path: .factory/issue.json
+          name: codex-spec-${{ github.run_id }}-${{ steps.artifact_identity.outputs.attempt }}
+          path: .factory/spec.json
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 30
 
   generate:
     name: Build implementation with Codex
-    needs: triage
-    if: needs.triage.outputs.state == 'ready-to-implement'
+    needs: [context, spec]
+    if: needs.spec.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -289,24 +525,33 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Preserve trusted boundary checker
-        run: cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+      - name: Preserve trusted factory controllers
+        run: |
+          cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+          cp scripts/factory/validate-spec.mjs "$RUNNER_TEMP/validate-spec.mjs"
 
       - name: Download immutable issue snapshot
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: codex-issue-${{ github.run_id }}-${{ needs.triage.outputs.issue_attempt }}
+          name: codex-issue-${{ github.run_id }}-${{ needs.context.outputs.issue_attempt }}
           path: .factory
 
-      - name: Verify issue snapshot
+      - name: Download immutable specification
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-spec-${{ github.run_id }}-${{ needs.spec.outputs.spec_attempt }}
+          path: .factory
+
+      - name: Verify issue snapshot and specification
         env:
-          ISSUE_NUMBER: ${{ needs.triage.outputs.issue_number }}
+          ISSUE_NUMBER: ${{ needs.context.outputs.issue_number }}
         run: |
           set -euo pipefail
           # shellcheck disable=SC2016
           jq -e --argjson number "$ISSUE_NUMBER" \
             '.number == $number and .state == "OPEN"' \
             .factory/issue.json > /dev/null
+          node "$RUNNER_TEMP/validate-spec.mjs" --validate .factory/spec.json
 
       - name: Implement with Codex
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
@@ -415,7 +660,7 @@ jobs:
 
   evaluate:
     name: Evaluate candidate with Codex
-    needs: [triage, generate]
+    needs: [context, spec, generate]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -429,13 +674,21 @@ jobs:
           ref: ${{ needs.generate.outputs.base_sha }}
           persist-credentials: false
 
-      - name: Preserve trusted boundary checker
-        run: cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+      - name: Preserve trusted factory controllers
+        run: |
+          cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
+          cp scripts/factory/validate-spec.mjs "$RUNNER_TEMP/validate-spec.mjs"
 
       - name: Download immutable issue snapshot
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: codex-issue-${{ github.run_id }}-${{ needs.triage.outputs.issue_attempt }}
+          name: codex-issue-${{ github.run_id }}-${{ needs.context.outputs.issue_attempt }}
+          path: .factory
+
+      - name: Download immutable specification
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-spec-${{ github.run_id }}-${{ needs.spec.outputs.spec_attempt }}
           path: .factory
 
       - name: Download candidate patch
@@ -450,6 +703,7 @@ jobs:
           test "$(cat .factory/base-sha)" = "$(git rev-parse HEAD)"
           git apply --index --binary .factory/change.patch
           node "$RUNNER_TEMP/check-boundaries.mjs"
+          node "$RUNNER_TEMP/validate-spec.mjs" --validate .factory/spec.json
 
       - name: Evaluate issue satisfaction with Codex
         id: codex
@@ -465,7 +719,7 @@ jobs:
 
   scenario:
     name: Prepare behavioral acceptance scenario
-    needs: [triage, generate, validate, evaluate]
+    needs: [context, spec, generate, validate, evaluate]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -484,11 +738,18 @@ jobs:
         run: |
           cp scripts/factory/check-boundaries.mjs "$RUNNER_TEMP/check-boundaries.mjs"
           cp scripts/factory/run-scenario.mjs "$RUNNER_TEMP/run-scenario.mjs"
+          cp scripts/factory/validate-spec.mjs "$RUNNER_TEMP/validate-spec.mjs"
 
       - name: Download immutable issue snapshot
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: codex-issue-${{ github.run_id }}-${{ needs.triage.outputs.issue_attempt }}
+          name: codex-issue-${{ github.run_id }}-${{ needs.context.outputs.issue_attempt }}
+          path: .factory
+
+      - name: Download immutable specification
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: codex-spec-${{ github.run_id }}-${{ needs.spec.outputs.spec_attempt }}
           path: .factory
 
       - name: Download validated candidate patch
@@ -503,6 +764,7 @@ jobs:
           test "$(cat .factory/base-sha)" = "$(git rev-parse HEAD)"
           git apply --index --binary .factory/change.patch
           node "$RUNNER_TEMP/check-boundaries.mjs"
+          node "$RUNNER_TEMP/validate-spec.mjs" --validate .factory/spec.json
 
       - name: Translate acceptance criteria into a browser scenario
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1.11
@@ -701,7 +963,7 @@ jobs:
 
   publish:
     name: Publish validated pull request
-    needs: [triage, generate, validate, evaluate, scenario, scenario_test]
+    needs: [context, generate, validate, evaluate, scenario, scenario_test]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -736,7 +998,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ needs.triage.outputs.issue_number }}
+          ISSUE_NUMBER: ${{ needs.context.outputs.issue_number }}
         run: |
           # shellcheck disable=SC2016
           set -euo pipefail
@@ -767,7 +1029,7 @@ jobs:
         id: candidate
         if: steps.existing_pr.outputs.url == ''
         env:
-          ISSUE_NUMBER: ${{ needs.triage.outputs.issue_number }}
+          ISSUE_NUMBER: ${{ needs.context.outputs.issue_number }}
         run: |
           set -euo pipefail
           branch="codex/issue-${ISSUE_NUMBER}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -783,7 +1045,7 @@ jobs:
       - name: Create immutable candidate attestation
         if: steps.existing_pr.outputs.url == ''
         env:
-          ISSUE_NUMBER: ${{ needs.triage.outputs.issue_number }}
+          ISSUE_NUMBER: ${{ needs.context.outputs.issue_number }}
           BASE_SHA: ${{ needs.generate.outputs.base_sha }}
           HEAD_SHA: ${{ steps.candidate.outputs.head_sha }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -821,7 +1083,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ needs.triage.outputs.issue_number }}
+          ISSUE_NUMBER: ${{ needs.context.outputs.issue_number }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EVALUATION_JSON: ${{ needs.evaluate.outputs.result }}
           SCENARIO_MODE: ${{ needs.scenario.outputs.mode }}
@@ -902,7 +1164,7 @@ jobs:
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
 
           labels_json="$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json labels)"
-          for old_label in "factory:ready" "factory:needs-info" "factory:wait"; do
+          for old_label in "factory:ready" "factory:needs-info" "factory:wait" "factory:approve"; do
             if jq -e --arg label "$old_label" \
               'any(.labels[]; .name == $label)' <<<"$labels_json" > /dev/null; then
               gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \

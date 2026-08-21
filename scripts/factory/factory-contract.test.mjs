@@ -10,7 +10,9 @@ test("factory keeps the complete issue-to-scenario lifecycle", () => {
   const workflow = read(".github/workflows/codex-factory.yml");
 
   for (const stage of [
+    "context",
     "triage",
+    "spec",
     "generate",
     "validate",
     "evaluate",
@@ -22,10 +24,57 @@ test("factory keeps the complete issue-to-scenario lifecycle", () => {
   }
   assert.match(
     workflow,
-    /needs: \[triage, generate, validate, evaluate, scenario, scenario_test\]/,
+    /needs: \[context, generate, validate, evaluate, scenario, scenario_test\]/,
   );
-  assert.match(workflow, /evaluate:\s+name: Evaluate candidate with Codex\s+needs: \[triage, generate\]/);
+  assert.match(workflow, /evaluate:\s+name: Evaluate candidate with Codex\s+needs: \[context, spec, generate\]/);
   assert.match(workflow, /validate:\s+name: Validate candidate without write credentials\s+needs: \[generate, evaluate\]/);
+});
+
+test("a bounded specification stage sits between triage and implementation", () => {
+  const workflow = read(".github/workflows/codex-factory.yml");
+  const prompt = read(".github/codex/prompts/spec.md");
+
+  // The spec stage is Codex-driven with a strict, re-validated output contract.
+  assert.match(workflow, /spec:\s+name: Specify feature with Codex\s+needs: \[context, triage\]/);
+  assert.match(workflow, /prompt-file: \.github\/codex\/prompts\/spec\.md/);
+  assert.match(
+    workflow,
+    /output-schema-file: \.github\/codex\/schemas\/spec\.schema\.json/,
+  );
+  assert.match(workflow, /validate-spec\.mjs" --validate \.factory\/spec\.json/);
+
+  // Implementation only runs when the spec stage decides to proceed.
+  assert.match(workflow, /generate:\s+name: Build implementation with Codex\s+needs: \[context, spec\]/);
+  assert.match(workflow, /if: needs\.spec\.outputs\.proceed == 'true'/);
+
+  // The spec is read-only, grounded, and downstream stages consume it.
+  assert.match(workflow, /Specify with Codex[\s\S]+?permission-profile: ":read-only"/);
+  assert.match(prompt, /README\.md/);
+  assert.match(prompt, /references/);
+  for (const consumer of [
+    ".github/codex/prompts/implement.md",
+    ".github/codex/prompts/evaluate.md",
+    ".github/codex/prompts/scenario.md",
+  ]) {
+    assert.match(read(consumer), /\.factory\/spec\.json/);
+  }
+});
+
+test("the approval gate holds at spec and the conversation re-specs", () => {
+  const workflow = read(".github/workflows/codex-factory.yml");
+
+  // Bot comments never re-trigger the factory (no self-conversation loop).
+  assert.match(
+    workflow,
+    /github\.event\.comment\.user\.login != 'github-actions\[bot\]'/,
+  );
+  // The approve label gates proceeding; an explicit /approve command releases it.
+  assert.match(workflow, /approve_requested/);
+  assert.match(workflow, /"\/approve"\|"\/approve "\*\)/);
+  assert.match(workflow, /needs\.context\.outputs\.approve_requested == 'true'/);
+  assert.match(workflow, /remove-label "factory:approve"/);
+  // A spec with unresolved questions parks the issue instead of building.
+  assert.match(workflow, /add-label "factory:needs-info"/);
 });
 
 test("implementation prompt keeps product changes outside factory controls", () => {
@@ -137,7 +186,7 @@ test("artifact consumers retain the producer attempt across failed-job reruns", 
 
   assert.match(workflow, /issue_attempt: \$\{\{ steps\.artifact_identity\.outputs\.attempt \}\}/);
   assert.match(workflow, /candidate_attempt: \$\{\{ steps\.artifact_identity\.outputs\.attempt \}\}/);
-  assert.match(workflow, /needs\.triage\.outputs\.issue_attempt/);
+  assert.match(workflow, /needs\.context\.outputs\.issue_attempt/);
   assert.match(workflow, /needs\.generate\.outputs\.candidate_attempt/);
   assert.doesNotMatch(
     workflow,
