@@ -24,6 +24,11 @@ test("accepts a bounded browser acceptance scenario", () => {
     steps: [
       { operation: "goto", target: "/", value: null },
       {
+        operation: "assert-attached",
+        target: 'input[type="file"]',
+        value: null,
+      },
+      {
         operation: "upload-image",
         target: 'input[type="file"]',
         value: null,

@@ -6,6 +6,7 @@ const OPERATIONS = new Set([
   "goto",
   "assert-text",
   "assert-visible",
+  "assert-attached",
   "upload-image",
   "fill",
   "click",
@@ -15,6 +16,7 @@ const OPERATIONS = new Set([
 
 const TARGET_ONLY = new Set([
   "assert-visible",
+  "assert-attached",
   "upload-image",
   "click",
   "assert-enabled",
@@ -24,6 +26,7 @@ const TARGET_ONLY = new Set([
 const ASSERTIONS = new Set([
   "assert-text",
   "assert-visible",
+  "assert-attached",
   "assert-enabled",
   "assert-disabled",
 ]);
@@ -151,6 +154,9 @@ async function executeStep(page, step, baseUrl) {
       break;
     case "assert-visible":
       await page.locator(step.target).first().waitFor({ state: "visible" });
+      break;
+    case "assert-attached":
+      await page.locator(step.target).first().waitFor({ state: "attached" });
       break;
     case "upload-image":
       await page.locator(step.target).setInputFiles({
