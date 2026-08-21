@@ -28,6 +28,14 @@ test("factory keeps the complete issue-to-scenario lifecycle", () => {
   assert.match(workflow, /validate:\s+name: Validate candidate without write credentials\s+needs: \[generate, evaluate\]/);
 });
 
+test("implementation prompt keeps product changes outside factory controls", () => {
+  const prompt = read(".github/codex/prompts/implement.md");
+
+  assert.match(prompt, /`scripts\/factory\/`/);
+  assert.match(prompt, /dependency manifests or lockfiles/);
+  assert.match(prompt, /Product tests belong with product code under `src\/`/);
+});
+
 test("Codex evaluation has a prompt and a bounded structured output", () => {
   const workflow = read(".github/workflows/codex-factory.yml");
   const prompt = read(".github/codex/prompts/evaluate.md");

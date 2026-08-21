@@ -10,7 +10,7 @@ Rules:
 2. Make the smallest cohesive change that fully satisfies the issue.
 3. Follow existing architecture and style; do not perform unrelated cleanup or dependency upgrades.
 4. Add or update tests when behavior changes.
-5. Do not modify `.github/workflows/`, `.github/codex/`, credentials, repository settings, permissions, tags, or releases.
+5. Do not modify factory or repository control files: `.github/`, `.codex/`, `.factory/`, `scripts/factory/`, `scripts/run-factory.mjs`, `AGENTS.md`, dependency manifests or lockfiles, and lint, TypeScript, Next.js, PostCSS, or Tailwind configuration. Product tests belong with product code under `src/`.
 6. Do not commit, push, open or merge pull requests, label issues, or post comments. Deterministic workflow steps handle all GitHub writes.
 7. Do not require the Gemini API key for validation. The controller will run install, lint, tests, and build after you finish.
 
