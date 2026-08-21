@@ -28,9 +28,7 @@ const MESSAGE_ICONS: Record<MessageKind, string> = {
   info: "ℹ️",
 };
 
-const NANO_BANANA_REPO_URL = "https://github.com/warpdotdev-demos/nano-banana-editor";
-const CLOUD_FACTORY_REPO_URL = "https://github.com/warpdotdev-demos/cloud-factory-demo";
-const WARP_URL = "https://warp.dev";
+const NANO_BANANA_REPO_URL = "https://github.com/dhosno/nano-banana-editor";
 
 // Vercel rejects serverless function request bodies larger than 4.5 MB with a
 // 413 before the route handler ever runs, so the API cannot return a useful
@@ -51,54 +49,11 @@ const getSizeError = (file: File): string | null =>
     ? `Image is too large (${formatBytes(file.size)}). The maximum upload size is ${MAX_IMAGE_LABEL}.`
     : null;
 
-// A small, self-authored terminal-prompt glyph used to attribute this demo to
-// Warp without embedding any official Warp brand asset.
-function WarpMark() {
-  return (
-    <svg
-      width="28"
-      height="28"
-      viewBox="0 0 28 28"
-      role="img"
-      aria-label="Warp"
-      className="shrink-0 rounded-md"
-    >
-      <defs>
-        <linearGradient id="warpMarkGradient" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#f97316" />
-          <stop offset="55%" stopColor="#ec4899" />
-          <stop offset="100%" stopColor="#8b5cf6" />
-        </linearGradient>
-      </defs>
-      <rect width="28" height="28" rx="7" fill="url(#warpMarkGradient)" />
-      <path
-        d="M8 9l4.5 5-4.5 5"
-        stroke="white"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        fill="none"
-      />
-      <path d="M14.5 19h6" stroke="white" strokeWidth="2.2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function SiteHeader() {
   return (
     <header className="border-b border-slate-200 bg-white/90 backdrop-blur supports-backdrop-blur:bg-white/60">
       <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-8">
-        <a
-          href={WARP_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 rounded-md text-sm font-semibold text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-500"
-        >
-          <WarpMark />
-          <span>Warp</span>
-          <span className="text-slate-300">/</span>
-          <span className="font-normal text-slate-500">Cloud Factory Demo</span>
-        </a>
+        <span className="text-sm font-semibold text-slate-900">🍌 Nano Banana Editor</span>
         <nav aria-label="Project repositories" className="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
           <a
             href={NANO_BANANA_REPO_URL}
@@ -106,15 +61,7 @@ function SiteHeader() {
             rel="noopener noreferrer"
             className="text-slate-600 underline decoration-slate-300 underline-offset-4 hover:text-slate-900 hover:decoration-slate-500"
           >
-            Nano Banana Editor repo
-          </a>
-          <a
-            href={CLOUD_FACTORY_REPO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-slate-600 underline decoration-slate-300 underline-offset-4 hover:text-slate-900 hover:decoration-slate-500"
-          >
-            Cloud Factory Demo repo
+            GitHub repository
           </a>
         </nav>
       </div>
@@ -125,37 +72,12 @@ function SiteHeader() {
 function LandingHero() {
   return (
     <section className="mx-auto max-w-3xl px-4 pb-2 pt-12 text-center sm:px-8 sm:pt-16">
-      <p className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600 shadow-sm">
-        <span aria-hidden="true">🏭</span> Built end-to-end by Warp&apos;s Cloud Factory
-      </p>
-      <h1 className="mt-4 text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
+      <h1 className="text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
         🍌 Nano Banana Editor
       </h1>
       <p className="mx-auto mt-4 max-w-2xl text-lg text-slate-600">
         Upload a photo, describe an edit in plain English, and Google&apos;s Gemini &ldquo;Nano
         Banana&rdquo; image model rewrites it — then keep iterating on the result, edit after edit.
-      </p>
-      <p className="mx-auto mt-3 max-w-2xl text-sm text-slate-500">
-        This app is a public demo for{" "}
-        <a
-          href={CLOUD_FACTORY_REPO_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-medium text-violet-700 underline underline-offset-2 hover:text-violet-900"
-        >
-          Warp&apos;s Cloud Factory
-        </a>
-        , an autonomous agent factory that triages issues, writes specs, ships code, and reviews
-        pull requests with no human in the loop. Its source lives in the{" "}
-        <a
-          href={NANO_BANANA_REPO_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-medium text-violet-700 underline underline-offset-2 hover:text-violet-900"
-        >
-          nano-banana-editor
-        </a>{" "}
-        repository.
       </p>
     </section>
   );

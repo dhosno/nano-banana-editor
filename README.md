@@ -205,18 +205,6 @@ Or just push to the default branch once the Git integration is connected.
 
 The app is a standard Next.js application and can be deployed to any platform that supports Node.js. The `maxDuration` export and the 4 MB client-side upload guard are Vercel-specific; other hosts may allow larger bodies or longer requests.
 
-## 🤖 Cloud Factory Automation
-
-This repository consumes Cloud Factory skills from the canonical [`warpdotdev-demos/cloud-factory-demo`](https://github.com/warpdotdev-demos/cloud-factory-demo) repository.
-
-To install or refresh the Triage and Implementation skills and workflow templates locally, run:
-
-```bash
-./scripts/bootstrap-cloud-factory.sh
-```
-
-The bootstrap script uses `npx skills install` to install the canonical skills into this repo and copies the workflow templates from `cloud-factory-demo`. Configure the `WARP_API_KEY` GitHub Actions secret before enabling the workflows.
-
 ## 🤝 Contributing
 
 1. Fork the repository
