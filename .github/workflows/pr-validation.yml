@@ -137,13 +137,17 @@ jobs:
 
       - name: Fetch and apply immutable pull request merge result
         env:
+          GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           mkdir -p .factory
-          if ! git fetch --no-tags --depth=2 origin \
+          # Base is checked out without persisted credentials; fetch the merge ref
+          # with a one-off token header (never persisted) so private repos work too.
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          if ! git -c http.extraheader="$auth_header" fetch --no-tags --depth=2 origin \
             "refs/pull/${PR_NUMBER}/merge"; then
             echo "::error::Pull request has no generated merge result; it may conflict with the base"
             exit 1
